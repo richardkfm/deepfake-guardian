@@ -19,6 +19,54 @@ and [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`).
   code conventions, and security notes.
 - `CHANGELOG.md` — this file.
 
+---
+
+## [0.6.0] — 2026-06-26 — Moderation Skills: pluggable, human-editable categories
+
+### Added
+
+**Engine — Moderation skill system (`engine/moderation/`):**
+- `engine/moderation/skill.py` — `ModerationSkill` dataclass: thresholds (per
+  profile), regex patterns, label maps, educational messages, and per-category
+  threshold/flag resolution.
+- `engine/moderation/loader.py` — parses a human-editable markdown skill file
+  (YAML frontmatter + `## Patterns (en)` / `## Labels (en)` / `## Educational
+  message (en)` sections) into a `ModerationSkill`.
+- `engine/moderation/registry.py` — auto-discovers every `skills/*.md` file
+  (mirrors `i18n.registry.LanguageRegistry`); serves core vs. opt-in skills,
+  aggregates patterns/labels/messages per language, and scores opt-in text
+  categories.
+- `engine/moderation/skills/*.md` — the five core child-safety categories
+  (violence, sexual_violence, nsfw, deepfake, cyberbullying) plus two new
+  **opt-in** categories: **advertising/spam** and **political_misinformation**.
+  These markdown files are now the single, human-editable source of truth for
+  thresholds, patterns, label maps, and educational messages.
+- New `ENABLED_CATEGORIES` env var (comma-separated skill ids) turns opt-in
+  categories on; each honours a `THRESHOLD_<ID>` override. Core categories stay
+  always-on.
+- `ModerationScores.extra: dict[str, float]` carries opt-in category scores in
+  the API response.
+- Tests: `test_skill_loader.py`, `test_moderation_registry.py`,
+  `test_advertising.py`, `test_political_misinformation.py`, plus opt-in cases
+  in `test_verdict.py`.
+
+### Changed
+- `engine/profiles.py` — threshold values now sourced from the core skill files
+  (`get_profile()` assembles a `ThresholdProfile` from the registry, with a
+  defensive fallback). Profile names and the public `ThresholdProfile` API are
+  unchanged.
+- `engine/verdict.py` — `decide()` is now generic: it evaluates the core
+  categories plus any enabled opt-in categories, instead of a hardcoded list.
+- `engine/i18n/packs/{en,de}.py` — `get_patterns()`, `get_labels()`, and
+  `get_educational_messages()` now delegate to the skill registry (single source
+  of truth); `detect()`, `get_classifier()`, and `get_helplines()` unchanged.
+- `engine/routes.py` — `/moderate_text` populates `scores.extra` from enabled
+  opt-in text categories; audit logging includes them.
+- `engine/requirements.txt` — added `PyYAML` for skill-file parsing.
+
+> Note: the bots require **no changes** — they already treat moderation
+> `reasons` as an opaque list of strings.
+
 ### Changed
 - `engine/profiles.py` — rebalanced `default` profile thresholds by detection
   priority: violence and sexual violence at `0.5` (highest — deleted at lowest

@@ -263,6 +263,39 @@ be addable without code changes.
 
 ---
 
+## Phase 4.5: Pluggable Moderation Skills ✅
+
+**Goal:** Turn moderation categories into human-editable markdown "skills" so
+new use cases can be added or tuned without code, and let operators extend
+Deepfake Guardian beyond child-safety to other audiences (e.g. anti-advertising,
+anti-political-misinformation) via a per-deployment switch.
+
+### 4.5.1 Skill system (Engine)
+- **New files:**
+  - `engine/moderation/skill.py` — `ModerationSkill` dataclass + threshold/score resolution
+  - `engine/moderation/loader.py` — markdown (YAML frontmatter + sections) → `ModerationSkill`
+  - `engine/moderation/registry.py` — auto-discovers `skills/*.md` (mirrors `i18n.registry`)
+  - `engine/moderation/skills/*.md` — five core categories + opt-in `advertising`,
+    `political_misinformation`
+- **Modified files:**
+  - `engine/profiles.py` — threshold values sourced from the skill files
+  - `engine/verdict.py` — generic over core + enabled opt-in categories
+  - `engine/models.py` — `ModerationScores.extra` for opt-in scores
+  - `engine/config.py` — `ENABLED_CATEGORIES`
+  - `engine/i18n/packs/{en,de}.py` — patterns/labels/messages delegate to the registry
+  - `engine/routes.py` — `/moderate_text` populates `scores.extra`
+  - `engine/requirements.txt` — added `PyYAML`
+
+### 4.5.2 Tests
+- `test_skill_loader.py`, `test_moderation_registry.py`, `test_advertising.py`,
+  `test_political_misinformation.py`, plus opt-in cases in `test_verdict.py`
+
+**Effort:** M | **Result:** Categories are markdown files; new use cases added by
+editing/adding one file; opt-in categories toggled via `ENABLED_CATEGORIES`.
+Bots unchanged.
+
+---
+
 ## Phase 5: Admin Dashboard & Moderation Tools
 
 **Goal:** Simple web dashboard for admins: moderation overview, statistics, configuration.
@@ -352,6 +385,7 @@ be addable without code changes.
 | 2 | i18n architecture, cyberbullying, DE+EN language packs | L–XL | Phase 1 |
 | 3 | GDPR, database, warning system, consent | XL | Phase 1 | ✅ |
 | 4 | Real deepfake detection, video analysis | L | Phase 1 | ✅ |
+| 4.5 | Pluggable moderation skills (markdown categories) | M | Phase 2 | ✅ |
 | 5 | Dashboard, admin tools, educational feedback | XL | Phase 2+3 |
 | 6 | WhatsApp parity, Signal, Discord, community languages | XL | Phase 5 |
 

@@ -27,7 +27,14 @@ class TestModerateText:
         body = resp.json()
         assert body["verdict"] == "allow"
         assert "scores" in body
-        expected_keys = {"violence", "sexual_violence", "nsfw", "deepfake_suspect", "cyberbullying"}
+        expected_keys = {
+            "violence",
+            "sexual_violence",
+            "nsfw",
+            "deepfake_suspect",
+            "cyberbullying",
+            "extra",  # opt-in category scores (empty unless ENABLED_CATEGORIES set)
+        }
         assert set(body["scores"].keys()) == expected_keys
 
     def test_empty_text_rejected(self, client):

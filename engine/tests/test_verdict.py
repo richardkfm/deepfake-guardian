@@ -122,3 +122,44 @@ class TestDecideBackwardCompatibility:
         scores = ModerationScores()
         result = decide(scores)
         assert result.language is None
+
+
+class TestDecideOptInCategories:
+    """Opt-in categories (advertising etc.) only count when enabled, and their
+    thresholds come from the skill markdown files (single source of truth)."""
+
+    @pytest.fixture()
+    def enable_advertising(self, monkeypatch):
+        from config import settings
+
+        monkeypatch.setattr(settings, "enabled_categories", ["advertising"])
+
+    def test_extra_score_ignored_when_disabled(self):
+        # Default: no categories enabled → a high advertising score is ignored
+        scores = ModerationScores(extra={"advertising": 0.99})
+        result = decide(scores)
+        assert result.verdict == "allow"
+        assert result.reasons == []
+
+    def test_extra_score_deletes_when_enabled(self, enable_advertising):
+        from moderation.registry import ModerationRegistry
+
+        threshold = ModerationRegistry.get("advertising").threshold()
+        scores = ModerationScores(extra={"advertising": threshold})
+        result = decide(scores)
+        assert result.verdict == "delete"
+        assert "advertising" in result.reasons
+
+    def test_extra_score_flags_below_threshold(self, enable_advertising):
+        # 0.5 is above the flag threshold (0.4) but below the delete threshold (0.85)
+        scores = ModerationScores(extra={"advertising": 0.5})
+        result = decide(scores)
+        assert result.verdict == "flag"
+        assert "elevated_advertising" in result.reasons
+
+    def test_core_categories_still_evaluated_alongside_opt_in(self, enable_advertising):
+        scores = ModerationScores(cyberbullying=0.65, extra={"advertising": 0.99})
+        result = decide(scores)
+        assert result.verdict == "delete"
+        assert "cyberbullying" in result.reasons
+        assert "advertising" in result.reasons

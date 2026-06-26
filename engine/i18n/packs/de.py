@@ -10,7 +10,6 @@ categories via :meth:`get_labels`.
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any
 
 from i18n.base import HarmPattern, Helpline, LanguagePack
@@ -70,96 +69,29 @@ class GermanPack(LanguagePack):
     # ------------------------------------------------------------------
 
     def get_labels(self) -> dict[str, str]:
-        """Map German model output labels to internal category names."""
-        return {
-            "threat": "violence",
-            "obscene": "nsfw",
-            "insult": "cyberbullying",
-            "identity_hate": "cyberbullying",
-            "toxic": "cyberbullying",
-            "severe_toxic": "cyberbullying",
-            "neutral": "safe",
-        }
+        """Map model output labels to internal categories (from skill files)."""
+        from moderation.registry import ModerationRegistry
+
+        return ModerationRegistry.labels_for_language(self.lang_code)
 
     # ------------------------------------------------------------------
     # Harm patterns
     # ------------------------------------------------------------------
 
     def get_patterns(self) -> list[HarmPattern]:
-        """Return German-language cyberbullying and harm patterns."""
-        return [
-            # Direct threats / Todesdrohungen
-            HarmPattern(
-                pattern=re.compile(
-                    r"\b(du solltest (sterben|tot sein|verschwinden)"
-                    r"|ich bringe dich um"
-                    r"|du bist es nicht wert zu leben"
-                    r"|niemand mag dich"
-                    r"|alle hassen dich"
-                    r"|keiner will dich"
-                    r"|hör auf zu leben)\b",
-                    re.IGNORECASE,
-                ),
-                category="cyberbullying",
-                weight=0.9,
-            ),
-            # Ausgrenzung (exclusion)
-            HarmPattern(
-                pattern=re.compile(
-                    r"\b(keiner mag dich|niemand mag dich|du gehörst nicht dazu"
-                    r"|du bist nicht willkommen|wir wollen dich nicht"
-                    r"|du bist ausgeschlossen)\b",
-                    re.IGNORECASE,
-                ),
-                category="cyberbullying",
-                weight=0.8,
-            ),
-            # Gezielte Beleidigungen (targeted insults)
-            HarmPattern(
-                pattern=re.compile(
-                    r"\b(du bist so (hässlich|dumm|fett|bescheuert|blöd|eklig"
-                    r"|widerlich|unnötig|nutzlos))\b",
-                    re.IGNORECASE,
-                ),
-                category="cyberbullying",
-                weight=0.7,
-            ),
-            # Erpressung (extortion)
-            HarmPattern(
-                pattern=re.compile(
-                    r"\b(ich zeig das allen|ich schick das an|ich poste das"
-                    r"|wenn du nicht|sonst zeige ich|ich mach dich fertig)\b",
-                    re.IGNORECASE,
-                ),
-                category="cyberbullying",
-                weight=0.75,
-            ),
-            # Doxxing indicators (German address/phone patterns)
-            HarmPattern(
-                pattern=re.compile(
-                    r"\b(deine adresse ist|ich weiß wo du wohnst"
-                    r"|ich kenne deine nummer)\b",
-                    re.IGNORECASE,
-                ),
-                category="cyberbullying",
-                weight=0.85,
-            ),
-        ]
+        """Return German harm patterns aggregated from the skill files."""
+        from moderation.registry import ModerationRegistry
+
+        return ModerationRegistry.patterns_for_language(self.lang_code)
 
     # ------------------------------------------------------------------
     # Educational messages
     # ------------------------------------------------------------------
 
     def get_educational_messages(self) -> dict[str, str]:
-        return {
-            "cyberbullying": (
-                "Diese Nachricht könnte Cybermobbing enthalten. "
-                "Bitte geh respektvoll miteinander um."
-            ),
-            "violence": "Diese Nachricht enthält gewalttätige Inhalte.",
-            "nsfw": "Diese Nachricht enthält unangemessene Inhalte.",
-            "sexual_violence": "Diese Nachricht enthält sexuelle oder gewalttätige Inhalte.",
-        }
+        from moderation.registry import ModerationRegistry
+
+        return ModerationRegistry.messages_for_language(self.lang_code)
 
     # ------------------------------------------------------------------
     # Helplines
