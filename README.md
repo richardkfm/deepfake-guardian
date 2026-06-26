@@ -6,6 +6,7 @@ cyberbullying, and deepfakes. Works with **Telegram** and **WhatsApp**.
 
 **Contents:**
 [What it does](#what-it-does) ·
+[Optional categories](#optional-categories-advertising--misinformation) ·
 [Quick start](#quick-start) ·
 [Documentation](#documentation) ·
 [Privacy](#privacy) ·
@@ -35,6 +36,33 @@ thresholds at once.
 
 Models run **locally on your server** — no message content leaves the machine
 unless you opt into a cloud-based deepfake provider.
+
+## Optional categories (advertising & misinformation)
+
+Beyond the always-on child-safety categories, Deepfake Guardian ships two extra
+categories that are **off by default**:
+
+| Category | Detects |
+|----------|---------|
+| `advertising` | Promotional spam, affiliate links, crypto shilling |
+| `political_misinformation` | Well-known hoaxes & manipulation framing (conservative, flag-leaning) |
+
+**Turn them on** by adding this line to `engine/.env` (comma-separated, enable
+either or both):
+
+```bash
+ENABLED_CATEGORIES=advertising,political_misinformation
+```
+
+Then restart the engine. Each is a [human-editable markdown skill](docs/configuration.md#moderation-categories-skills)
+— tune its patterns/thresholds by editing one file, and override a threshold
+with `THRESHOLD_ADVERTISING` / `THRESHOLD_POLITICAL_MISINFORMATION`.
+
+> **Note on misinformation:** "misinformation" is contested and
+> context-dependent. This category only matches a small set of widely-debunked
+> claims and manipulation phrasing, and is tuned to *flag for human review*
+> rather than auto-delete. Review and tune it for your community before relying
+> on it.
 
 ## Quick start
 
