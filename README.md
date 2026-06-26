@@ -270,6 +270,25 @@ Set all thresholds at once with `MODERATION_PROFILE`:
 
 Individual `THRESHOLD_*` vars override specific values within the profile.
 
+### Opt-in moderation categories (skills)
+
+Beyond the always-on child-safety categories, Deepfake Guardian ships extra
+**opt-in** categories defined as human-editable markdown "skills" in
+`engine/moderation/skills/*.md`. They are **off by default**; enable them per
+deployment:
+
+```bash
+ENABLED_CATEGORIES=advertising,political_misinformation
+```
+
+| Skill id | Detects | Notes |
+|----------|---------|-------|
+| `advertising` | Promotional spam, affiliate links, crypto shilling | Pattern-based |
+| `political_misinformation` | Well-known hoaxes & manipulation framing | Conservative, flag-leaning; "misinformation" is contested — tune for your community |
+
+Add or tune a category by editing/adding one markdown file — no code changes.
+Each category honours a `THRESHOLD_<ID>` override (e.g. `THRESHOLD_ADVERTISING`).
+
 ### Engine — all variables
 
 | Variable | Default | Description |
@@ -286,6 +305,7 @@ Individual `THRESHOLD_*` vars override specific values within the profile.
 | `THRESHOLD_NSFW` | _from profile_ | Override NSFW threshold |
 | `THRESHOLD_DEEPFAKE` | _from profile_ | Override deepfake threshold |
 | `THRESHOLD_CYBERBULLYING` | _from profile_ | Override cyberbullying threshold |
+| `ENABLED_CATEGORIES` | _(empty)_ | Opt-in moderation skills, comma-separated (e.g. `advertising,political_misinformation`) |
 | `DEEPFAKE_PROVIDER` | `stub` | `openai` \| `ollama` \| `local` \| `sightengine` \| `api` \| `stub` |
 | `OPENAI_API_KEY` | _(empty)_ | OpenAI key (for `openai` provider) |
 | `OPENAI_MODEL` | `gpt-4o` | OpenAI vision model |

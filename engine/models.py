@@ -47,6 +47,9 @@ class ModerationScores(BaseModel):
     nsfw: float = Field(0.0, ge=0.0, le=1.0)
     deepfake_suspect: float = Field(0.0, ge=0.0, le=1.0)
     cyberbullying: float = Field(0.0, ge=0.0, le=1.0)
+    # Scores for opt-in moderation categories (e.g. advertising), keyed by
+    # skill id.  Empty unless those categories are enabled via ENABLED_CATEGORIES.
+    extra: dict[str, float] = Field(default_factory=dict)
 
 
 class ModerationResult(BaseModel):

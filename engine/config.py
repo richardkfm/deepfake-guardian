@@ -36,6 +36,15 @@ class Settings:
             if lang.strip()
         ]
 
+        # Opt-in moderation categories — comma-separated list of skill ids
+        # (e.g. "advertising,political_misinformation").  Core child-safety
+        # categories are always on; these run only when listed here.
+        self.enabled_categories: list[str] = [
+            cat.strip()
+            for cat in os.getenv("ENABLED_CATEGORIES", "").split(",")
+            if cat.strip()
+        ]
+
         # Moderation profile — sets default thresholds; individual env vars override
         self.moderation_profile: str = os.getenv("MODERATION_PROFILE", "default")
 

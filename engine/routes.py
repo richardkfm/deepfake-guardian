@@ -31,6 +31,7 @@ def _score_dict(scores: ModerationScores) -> dict[str, float]:
         "nsfw": scores.nsfw,
         "deepfake_suspect": scores.deepfake_suspect,
         "cyberbullying": scores.cyberbullying,
+        **scores.extra,
     }
 
 
@@ -44,10 +45,18 @@ async def moderate_text(
     request: Request, req: TextRequest, background_tasks: BackgroundTasks
 ) -> ModerationResult:
     """Classify plain text and return a moderation verdict."""
+    from config import settings
     from i18n.detector import detect_language
+    from moderation.registry import ModerationRegistry
 
     lang_code = req.language or detect_language(req.text)
     text_scores = classify_text(req.text, lang_code)
+
+    # Opt-in categories (advertising, political misinformation, …) — empty
+    # unless enabled via ENABLED_CATEGORIES.
+    extra = ModerationRegistry.score_text_categories(
+        req.text, lang_code, settings.enabled_categories
+    )
 
     scores = ModerationScores(
         violence=text_scores["violence"],
@@ -55,6 +64,7 @@ async def moderate_text(
         nsfw=text_scores["nsfw"],
         deepfake_suspect=0.0,
         cyberbullying=text_scores.get("cyberbullying", 0.0),
+        extra=extra,
     )
     result = decide(scores)
     result = result.model_copy(update={"language": lang_code})

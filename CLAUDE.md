@@ -47,8 +47,9 @@ The central brain. All bots call this API to get moderation decisions.
 | `main.py` | FastAPI app factory, mounts router, configures structlog |
 | `routes.py` | Three POST endpoints: `/moderate_text`, `/moderate_image`, `/moderate_video` |
 | `classifiers.py` | ML classifiers: text (BART zero-shot), image (CLIP zero-shot + violence), deepfake (provider-based) |
-| `verdict.py` | `decide(scores)` → `"allow"` / `"flag"` / `"delete"` based on thresholds |
-| `profiles.py` | Named threshold profiles (`minors_strict`, `default`, `permissive`) — **single source of truth for default thresholds** |
+| `verdict.py` | `decide(scores)` → `"allow"` / `"flag"` / `"delete"`; evaluates core + enabled opt-in categories |
+| `profiles.py` | Named threshold profiles (`minors_strict`, `default`, `permissive`) — values now sourced from the skill files |
+| `moderation/` | **Moderation skills** — markdown-defined categories (`skill.py`, `loader.py`, `registry.py`, `skills/*.md`) |
 | `models.py` | Pydantic request/response schemas (`ModerationResult`, `ModerationScores`) |
 | `config.py` | `Settings` class — all config from env vars with sane defaults |
 | `requirements.txt` | Python dependencies |
@@ -71,17 +72,25 @@ GET  /health          (health check)
     "violence": 0.0,
     "sexual_violence": 0.0,
     "nsfw": 0.0,
-    "deepfake_suspect": 0.0
+    "deepfake_suspect": 0.0,
+    "cyberbullying": 0.0,
+    "extra": {}
   }
 }
 ```
+
+`scores.extra` holds scores for any enabled **opt-in** categories (see
+*Moderation Skills* below); it is empty unless `ENABLED_CATEGORIES` is set.
 
 **Verdict logic** (`verdict.py`):
 - Score ≥ threshold → `"delete"` (reason added to list)
 - Any score ≥ 0.4 but below threshold → `"flag"`
 - Otherwise → `"allow"`
 
-**Threshold profiles** (`engine/profiles.py` — single source of truth):
+`decide()` is generic: it evaluates the five core categories plus any enabled
+opt-in categories, reading each category's threshold from its skill.
+
+**Threshold profiles** (`engine/profiles.py`):
 
 | Profile | violence | sexual_violence | nsfw | deepfake | cyberbullying |
 |---------|----------|-----------------|------|----------|---------------|
@@ -90,11 +99,61 @@ GET  /health          (health check)
 | `permissive` | 0.85 | 0.7 | 0.75 | 0.9 | 0.8 |
 
 Select a profile via `MODERATION_PROFILE=default` (env var). Individual
-`THRESHOLD_*` env vars override a single value within the chosen profile.
+`THRESHOLD_*` env vars override a single value within the chosen profile. The
+**threshold values themselves now live in the skill files**
+(`engine/moderation/skills/*.md`) — `profiles.py` reads them from there. Test
+thresholds are derived from the registry, so there is no longer a manual
+"keep in sync" rule.
 
-> **Contributor rule:** whenever you change a threshold value in `profiles.py`,
-> update the matching hardcoded values in `engine/tests/test_verdict.py` in the
-> same commit. Mismatches cause CI failures.
+### Moderation Skills (`engine/moderation/`)
+
+Every moderation category is a **human-editable markdown file** in
+`engine/moderation/skills/<category_id>.md`. A loader parses each file into a
+`ModerationSkill`, and a registry auto-discovers them (mirroring the i18n
+language-pack pattern). To add or tune a category, edit/add one markdown file —
+no Python changes required.
+
+- **Core categories** (`core: true`) — always on: `violence`, `sexual_violence`,
+  `nsfw`, `deepfake_suspect`, `cyberbullying`.
+- **Opt-in categories** (`core: false`) — off by default, enabled per
+  deployment via `ENABLED_CATEGORIES`: `advertising`, `political_misinformation`.
+
+Skill file format:
+
+```markdown
+---
+category_id: advertising
+display_name: Advertising / Spam
+core: false                 # true = always-on; false = opt-in
+modalities: [text]
+thresholds: { minors_strict: 0.7, default: 0.85, permissive: 0.9 }
+flag_threshold: 0.4
+---
+
+## Description
+What this category detects.
+
+## Patterns (en)            # per-language; "## Patterns (de)" etc.
+- weight: 0.8  `(?i)\b(buy now|use code)\b`
+
+## Structural patterns      # language-neutral
+- weight: 0.5  `(https?://\S+\s*){3,}`
+
+## Labels (en)              # ML model-label -> internal category (ML categories)
+- "hate speech" -> nsfw
+
+## Educational message (en)
+This message looks like advertising.
+```
+
+Enable opt-in categories with `ENABLED_CATEGORIES=advertising,political_misinformation`.
+Each opt-in category honours a `THRESHOLD_<ID>` env override (e.g.
+`THRESHOLD_ADVERTISING=0.85`). Opt-in text scores are returned in `scores.extra`.
+
+> **Note:** `political_misinformation` ships disabled and intentionally
+> conservative — "misinformation" is contested, so it only matches a small set
+> of widely-debunked claims/manipulation framing and is tuned to *flag for
+> human review* rather than auto-delete. Tune the patterns for your community.
 
 ### `telegram-bot/`
 
@@ -132,6 +191,9 @@ Lives in `src/`. See its own `README.md` for setup details.
 | GDPR / data persistence | ✅ Async SQLAlchemy + GDPR service |
 | i18n | ✅ Language pack architecture (EN, DE) |
 | Cyberbullying detection | ✅ Pattern + ML hybrid |
+| Pluggable moderation categories | ✅ Markdown "skills" in `engine/moderation/skills/`; toggle via `ENABLED_CATEGORIES` |
+| Advertising / spam detection | ✅ Opt-in skill (pattern-based) — enable via `ENABLED_CATEGORIES=advertising` |
+| Political misinformation detection | ✅ Opt-in skill (conservative, flag-leaning) — enable via `ENABLED_CATEGORIES=political_misinformation` |
 | Admin dashboard | Not implemented — Phase 5 |
 | WhatsApp GDPR commands | Not implemented — Phase 6 |
 
@@ -206,6 +268,8 @@ curl -X POST http://localhost:8000/moderate_text \
 | `THRESHOLD_NSFW` | `0.8` | Override delete threshold for NSFW |
 | `THRESHOLD_DEEPFAKE` | `0.7` | Override delete threshold for deepfake |
 | `THRESHOLD_CYBERBULLYING` | `0.65` | Override delete threshold for cyberbullying |
+| `ENABLED_CATEGORIES` | *(empty)* | Comma-separated opt-in moderation skills (e.g. `advertising,political_misinformation`) |
+| `THRESHOLD_<ID>` | *(skill default)* | Override delete threshold for an opt-in category (e.g. `THRESHOLD_ADVERTISING`) |
 
 ### Telegram bot (`telegram-bot/.env`)
 
@@ -234,7 +298,7 @@ curl -X POST http://localhost:8000/moderate_text \
 ## Key Architectural Decisions
 
 1. **Engine is the single source of truth** for moderation logic. Bots are thin clients — they only forward content and act on verdicts.
-2. **Profile-based thresholds** (`engine/profiles.py`): three named profiles (`minors_strict`, `default`, `permissive`) ship with the engine. The active profile is set via `MODERATION_PROFILE`; individual `THRESHOLD_*` env vars override a single value within the chosen profile. Tests in `test_verdict.py` hard-code the `default` profile values — keep them in sync.
+2. **Skill-defined categories & thresholds**: each moderation category is a human-editable markdown file in `engine/moderation/skills/*.md` (thresholds, patterns, label maps, messages). A registry auto-discovers them. Three named profiles (`minors_strict`, `default`, `permissive`) select which threshold column applies via `MODERATION_PROFILE`; `THRESHOLD_*` env vars override individual values. Core categories are always on; opt-in categories are enabled via `ENABLED_CATEGORIES`. Tests derive thresholds from the registry, so no manual sync is needed.
 3. **i18n-first architecture** (Phase 2): language detection → language pack → language-specific ML model + patterns + support resources. Adding a new language = one new Python file.
 4. **GDPR-first** (Phase 3): user IDs are hashed before storage; message content is never persisted; auto-deletion after 30 days; full Article 17 (right to erasure) support.
 5. **Telegram has higher priority** than WhatsApp — it uses the official Bot API and is simpler to develop against.
