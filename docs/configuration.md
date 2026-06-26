@@ -35,15 +35,20 @@ code changes.
 **Opt-in categories** are off by default — enable per deployment:
 
 ```bash
-ENABLED_CATEGORIES=advertising,political_misinformation
+ENABLED_CATEGORIES=advertising,scams,political_misinformation,hate_speech,self_harm
 ```
 
 | Skill id | Detects | Notes |
 |----------|---------|-------|
-| `advertising` | Promotional spam, affiliate links, crypto shilling | Pattern-based |
-| `political_misinformation` | Well-known hoaxes & manipulation framing | Conservative, flag-leaning; "misinformation" is contested — tune for your community |
+| `advertising` | Promo/spam: supplements, insurance, sexual services, crypto, get-rich-quick | Pattern-based |
+| `scams` | Fake prizes, advance-fee, account phishing, gift-card & crypto-wallet theft | Message links fraud-reporting services |
+| `political_misinformation` | Conspiracy theories, manipulation framing, well-known hoaxes | Conservative, flag-leaning; message links fact-checkers. "Misinformation" is contested — tune it |
+| `hate_speech` | Racism, dehumanising generalisations, calls for violence against a group | Calls for violence weighted to delete; framing-based, not a slur list |
+| `self_harm` | Promotion/encouragement of suicide, self-harm, or disordered eating | Flag-leaning; message links crisis helplines. Targets *promotion*, not someone in distress |
 
-Each category honours a `THRESHOLD_<ID>` override (e.g. `THRESHOLD_ADVERTISING`).
+Each category honours a `THRESHOLD_<ID>` override (e.g. `THRESHOLD_ADVERTISING`,
+`THRESHOLD_HATE_SPEECH`). Each skill's educational message includes relevant
+fact-checking or help/reporting resources.
 Opt-in scores are returned under `scores.extra` in the API response.
 
 ## Engine — all variables

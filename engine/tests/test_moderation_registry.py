@@ -30,7 +30,13 @@ class TestDiscovery:
 
     def test_opt_in_skills_are_not_core(self):
         opt_in_ids = {s.category_id for s in ModerationRegistry.opt_in_skills()}
-        assert opt_in_ids == {"advertising", "political_misinformation"}
+        assert opt_in_ids == {
+            "advertising",
+            "scams",
+            "political_misinformation",
+            "hate_speech",
+            "self_harm",
+        }
 
     def test_auto_discovers_on_first_access(self):
         # No explicit discover() call
