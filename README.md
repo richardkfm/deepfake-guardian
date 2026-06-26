@@ -39,30 +39,33 @@ unless you opt into a cloud-based deepfake provider.
 
 ## Optional categories (advertising & misinformation)
 
-Beyond the always-on child-safety categories, Deepfake Guardian ships two extra
+Beyond the always-on child-safety categories, Deepfake Guardian ships extra
 categories that are **off by default**:
 
 | Category | Detects |
 |----------|---------|
-| `advertising` | Promotional spam, affiliate links, crypto shilling |
-| `political_misinformation` | Well-known hoaxes & manipulation framing (conservative, flag-leaning) |
+| `advertising` | Promo/spam: supplements, insurance, sexual services, crypto, get-rich-quick |
+| `scams` | Fake prizes, advance-fee, account phishing, gift-card & crypto-wallet theft |
+| `political_misinformation` | Conspiracy theories & well-known hoaxes (conservative, flag-leaning; links fact-checkers) |
+| `hate_speech` | Racism, dehumanising generalisations, calls for violence against a group |
+| `self_harm` | Promotion of suicide, self-harm, or disordered eating (flag-leaning; links crisis helplines) |
 
-**Turn them on** by adding this line to `engine/.env` (comma-separated, enable
-either or both):
+**Turn them on** by adding this line to `engine/.env` (comma-separated, pick any):
 
 ```bash
-ENABLED_CATEGORIES=advertising,political_misinformation
+ENABLED_CATEGORIES=advertising,scams,political_misinformation,hate_speech,self_harm
 ```
 
 Then restart the engine. Each is a [human-editable markdown skill](docs/configuration.md#moderation-categories-skills)
 — tune its patterns/thresholds by editing one file, and override a threshold
-with `THRESHOLD_ADVERTISING` / `THRESHOLD_POLITICAL_MISINFORMATION`.
+with `THRESHOLD_<ID>` (e.g. `THRESHOLD_ADVERTISING`). Each skill's educational
+message links relevant fact-checking or help/reporting services.
 
-> **Note on misinformation:** "misinformation" is contested and
-> context-dependent. This category only matches a small set of widely-debunked
-> claims and manipulation phrasing, and is tuned to *flag for human review*
-> rather than auto-delete. Review and tune it for your community before relying
-> on it.
+> **Notes:** `political_misinformation` is conservative and flag-leaning —
+> "misinformation" is contested, so it matches only well-known claims/framing and
+> is meant to prompt human review. `self_harm` targets content that *promotes or
+> encourages* harm, **not** someone expressing their own distress (who needs
+> support, not moderation). Review and tune both before relying on them.
 
 ## Quick start
 

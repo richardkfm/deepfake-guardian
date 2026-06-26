@@ -21,6 +21,32 @@ and [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`).
 
 ---
 
+## [0.7.0] — 2026-06-26 — Broader skills + new opt-in categories
+
+### Added
+- **New opt-in moderation skills** (`engine/moderation/skills/`):
+  - `scams` — fake prizes, advance-fee, account/phishing, gift-card & crypto-wallet
+    theft; message links fraud-reporting services.
+  - `hate_speech` — racism, dehumanising generalisations, and calls for violence
+    against a group (framing-based, not a slur list); incitement weighted to delete.
+  - `self_harm` — promotion/encouragement of suicide, self-harm, or disordered
+    eating; flag-leaning, message links crisis helplines. Targets *promotion*,
+    not someone expressing their own distress.
+- Each opt-in skill's educational message now includes relevant fact-checking or
+  help/reporting resources.
+- Tests: `test_hate_speech.py`, `test_scams.py`, `test_self_harm.py`.
+
+### Changed
+- `advertising` skill broadened: supplements, insurance, sexual services, crypto
+  shilling, get-rich-quick, plus link/contact spam — in EN and DE.
+- `political_misinformation` skill broadened: conspiracy theories + manipulation
+  framing + well-known hoaxes, with fact-checker links in the message. Racism and
+  calls for violence moved to the dedicated `hate_speech` skill.
+- Strong signals (calls for violence, wallet-phrase theft) lean toward delete;
+  broad/ambiguous signals lean toward a human-review flag.
+
+---
+
 ## [0.6.0] — 2026-06-26 — Moderation Skills: pluggable, human-editable categories
 
 ### Added

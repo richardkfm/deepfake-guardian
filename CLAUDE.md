@@ -116,7 +116,8 @@ no Python changes required.
 - **Core categories** (`core: true`) — always on: `violence`, `sexual_violence`,
   `nsfw`, `deepfake_suspect`, `cyberbullying`.
 - **Opt-in categories** (`core: false`) — off by default, enabled per
-  deployment via `ENABLED_CATEGORIES`: `advertising`, `political_misinformation`.
+  deployment via `ENABLED_CATEGORIES`: `advertising`, `scams`,
+  `political_misinformation`, `hate_speech`, `self_harm`.
 
 Skill file format:
 
@@ -192,8 +193,11 @@ Lives in `src/`. See its own `README.md` for setup details.
 | i18n | ✅ Language pack architecture (EN, DE) |
 | Cyberbullying detection | ✅ Pattern + ML hybrid |
 | Pluggable moderation categories | ✅ Markdown "skills" in `engine/moderation/skills/`; toggle via `ENABLED_CATEGORIES` |
-| Advertising / spam detection | ✅ Opt-in skill (pattern-based) — enable via `ENABLED_CATEGORIES=advertising` |
-| Political misinformation detection | ✅ Opt-in skill (conservative, flag-leaning) — enable via `ENABLED_CATEGORIES=political_misinformation` |
+| Advertising / spam detection | ✅ Opt-in skill — supplements, insurance, sexual services, crypto, get-rich-quick |
+| Scams / phishing detection | ✅ Opt-in skill — fake prizes, advance-fee, account phishing, gift-card/crypto-wallet theft |
+| Political misinformation detection | ✅ Opt-in skill (conservative, flag-leaning) — conspiracy theories + fake news; messages link fact-checkers |
+| Hate speech / incitement detection | ✅ Opt-in skill — racism, dehumanising generalisations, calls for violence |
+| Self-harm / ED promotion detection | ✅ Opt-in skill (flag-leaning) — messages link crisis helplines |
 | Admin dashboard | Not implemented — Phase 5 |
 | WhatsApp GDPR commands | Not implemented — Phase 6 |
 
