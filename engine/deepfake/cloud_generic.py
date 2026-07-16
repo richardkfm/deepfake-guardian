@@ -47,6 +47,13 @@ class GenericApiDetector(DeepfakeDetector):
         # Dot-separated path to extract the score from the JSON response
         self._score_path = getattr(settings, "deepfake_api_score_path", "score")
 
+        if self.is_available():
+            logger.warning(
+                "GDPR notice: generic API deepfake provider is active (url=%s). "
+                "Face images will be sent to this endpoint.",
+                self._api_url,
+            )
+
     def detect(self, face_images: list[Image.Image]) -> list[float]:
         """Send each face crop to the configured API and return scores."""
         import httpx

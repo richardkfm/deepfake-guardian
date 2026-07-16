@@ -13,6 +13,12 @@ Manipulated or AI-generated (deepfake) faces in images or video. Detection is
 performed by the provider-based pipeline in `engine/deepfake/`; this file holds
 its thresholds and user-facing messages.
 
+The detection *backends* actually run are configured via
+`engine/deepfake/layers/*.md` and the `DEEPFAKE_LAYERS` env var (see
+CLAUDE.md § Deepfake Detection Layers) — this file continues to hold only
+thresholds and messages for the `deepfake_suspect` category, not detection
+logic.
+
 ## Educational message (en)
 This media may be a manipulated or AI-generated (deepfake) image or video.
 

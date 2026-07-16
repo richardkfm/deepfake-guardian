@@ -16,6 +16,7 @@ from PIL import Image
 os.environ.setdefault("API_KEY", "")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test_guardian.db")
 os.environ.setdefault("GDPR_SALT", "test-salt-for-tests")
+os.environ.setdefault("DEEPFAKE_LAYERS", "")
 
 _TEST_DB_PATH = "./test_guardian.db"
 if os.path.exists(_TEST_DB_PATH):
