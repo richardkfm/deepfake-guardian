@@ -30,7 +30,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import get_session
-from db_models import ConsentRecord, DeletionRequest, ModerationEvent, ProtectedImageHash, UserWarning
+from db_models import (
+    ConsentRecord,
+    DeletionRequest,
+    ModerationEvent,
+    ProtectedImageHash,
+    UserWarning,
+)
 
 logger = structlog.get_logger()
 
