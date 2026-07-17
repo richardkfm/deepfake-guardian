@@ -205,3 +205,192 @@ class TestDetectDeepfakeSuspect:
                 img = _make_image(*size)
                 score = detect_deepfake_suspect(img)
                 assert 0.0 <= score <= 1.0
+
+
+class TestDetectDeepfakeSuspectBackwardCompat:
+    """When DEEPFAKE_LAYERS is unset, behaviour must be identical to legacy."""
+
+    def test_legacy_path_used_when_layers_unset(self):
+        face = _make_image(50, 50)
+        mock_detector = MagicMock()
+        mock_detector.detect.return_value = [0.4]
+        mock_detector.name = "mock"
+
+        with (
+            patch("deepfake.face_extractor.extract_faces", return_value=[face]),
+            patch("config.settings") as mock_settings,
+            patch("deepfake.factory.get_detector", return_value=mock_detector) as mock_get_detector,
+        ):
+            mock_settings.deepfake_layers = []
+            score = detect_deepfake_suspect(_make_image())
+
+        mock_get_detector.assert_called_once()
+        assert score == pytest.approx(0.4)
+
+
+class TestDetectDeepfakeSuspectMultiLayer:
+    def _make_layer(self, layer_id: str, weight: float = 1.0):
+        from deepfake.layer import DeepfakeLayer
+
+        return DeepfakeLayer(layer_id=layer_id, display_name=layer_id, provider="stub", weight=weight)
+
+    def test_max_strategy_picks_higher_layer_score(self):
+        face = _make_image(50, 50)
+        layer_a = self._make_layer("a")
+        layer_b = self._make_layer("b")
+
+        det_a = MagicMock()
+        det_a.detect.return_value = [0.2]
+        det_b = MagicMock()
+        det_b.detect.return_value = [0.9]
+
+        def _get_detector_for(layer):
+            return {"a": det_a, "b": det_b}[layer.layer_id]
+
+        with (
+            patch("deepfake.face_extractor.extract_faces", return_value=[face]),
+            patch("config.settings") as mock_settings,
+            patch(
+                "deepfake.layer_registry.DeepfakeLayerRegistry.active_layers",
+                return_value=[layer_a, layer_b],
+            ),
+            patch(
+                "deepfake.layer_registry.DeepfakeLayerRegistry.get_detector_for",
+                side_effect=_get_detector_for,
+            ),
+        ):
+            mock_settings.deepfake_layers = ["a", "b"]
+            mock_settings.deepfake_layer_combine = "max"
+            score = detect_deepfake_suspect(_make_image())
+
+        assert score == pytest.approx(0.9)
+
+    def test_mean_strategy_averages_layer_scores(self):
+        face = _make_image(50, 50)
+        layer_a = self._make_layer("a")
+        layer_b = self._make_layer("b")
+
+        det_a = MagicMock()
+        det_a.detect.return_value = [0.2]
+        det_b = MagicMock()
+        det_b.detect.return_value = [0.8]
+
+        def _get_detector_for(layer):
+            return {"a": det_a, "b": det_b}[layer.layer_id]
+
+        with (
+            patch("deepfake.face_extractor.extract_faces", return_value=[face]),
+            patch("config.settings") as mock_settings,
+            patch(
+                "deepfake.layer_registry.DeepfakeLayerRegistry.active_layers",
+                return_value=[layer_a, layer_b],
+            ),
+            patch(
+                "deepfake.layer_registry.DeepfakeLayerRegistry.get_detector_for",
+                side_effect=_get_detector_for,
+            ),
+        ):
+            mock_settings.deepfake_layers = ["a", "b"]
+            mock_settings.deepfake_layer_combine = "mean"
+            score = detect_deepfake_suspect(_make_image())
+
+        assert score == pytest.approx(0.5)
+
+    def test_weighted_mean_respects_layer_weight(self):
+        face = _make_image(50, 50)
+        layer_a = self._make_layer("a", weight=1.0)
+        layer_b = self._make_layer("b", weight=3.0)
+
+        det_a = MagicMock()
+        det_a.detect.return_value = [0.2]
+        det_b = MagicMock()
+        det_b.detect.return_value = [0.8]
+
+        def _get_detector_for(layer):
+            return {"a": det_a, "b": det_b}[layer.layer_id]
+
+        with (
+            patch("deepfake.face_extractor.extract_faces", return_value=[face]),
+            patch("config.settings") as mock_settings,
+            patch(
+                "deepfake.layer_registry.DeepfakeLayerRegistry.active_layers",
+                return_value=[layer_a, layer_b],
+            ),
+            patch(
+                "deepfake.layer_registry.DeepfakeLayerRegistry.get_detector_for",
+                side_effect=_get_detector_for,
+            ),
+        ):
+            mock_settings.deepfake_layers = ["a", "b"]
+            mock_settings.deepfake_layer_combine = "weighted_mean"
+            score = detect_deepfake_suspect(_make_image())
+
+        assert score == pytest.approx(0.65)
+
+    def test_no_matching_layers_returns_baseline_and_does_not_fall_back(self):
+        face = _make_image(50, 50)
+
+        with (
+            patch("deepfake.face_extractor.extract_faces", return_value=[face]),
+            patch("config.settings") as mock_settings,
+            patch(
+                "deepfake.layer_registry.DeepfakeLayerRegistry.active_layers",
+                return_value=[],
+            ),
+            patch("deepfake.factory.get_detector") as mock_get_detector,
+        ):
+            mock_settings.deepfake_layers = ["typo_layer"]
+            score = detect_deepfake_suspect(_make_image())
+
+        assert score == pytest.approx(0.05)
+        mock_get_detector.assert_not_called()
+
+    def test_unavailable_layer_dropped_others_still_combine(self):
+        face = _make_image(50, 50)
+        layer_a = self._make_layer("a")
+        layer_b = self._make_layer("b")
+
+        det_b = MagicMock()
+        det_b.detect.return_value = [0.7]
+
+        def _get_detector_for(layer):
+            return {"a": None, "b": det_b}[layer.layer_id]
+
+        with (
+            patch("deepfake.face_extractor.extract_faces", return_value=[face]),
+            patch("config.settings") as mock_settings,
+            patch(
+                "deepfake.layer_registry.DeepfakeLayerRegistry.active_layers",
+                return_value=[layer_a, layer_b],
+            ),
+            patch(
+                "deepfake.layer_registry.DeepfakeLayerRegistry.get_detector_for",
+                side_effect=_get_detector_for,
+            ),
+        ):
+            mock_settings.deepfake_layers = ["a", "b"]
+            mock_settings.deepfake_layer_combine = "max"
+            score = detect_deepfake_suspect(_make_image())
+
+        assert score == pytest.approx(0.7)
+
+    def test_all_layers_unavailable_returns_baseline(self):
+        face = _make_image(50, 50)
+        layer_a = self._make_layer("a")
+
+        with (
+            patch("deepfake.face_extractor.extract_faces", return_value=[face]),
+            patch("config.settings") as mock_settings,
+            patch(
+                "deepfake.layer_registry.DeepfakeLayerRegistry.active_layers",
+                return_value=[layer_a],
+            ),
+            patch(
+                "deepfake.layer_registry.DeepfakeLayerRegistry.get_detector_for",
+                return_value=None,
+            ),
+        ):
+            mock_settings.deepfake_layers = ["a"]
+            score = detect_deepfake_suspect(_make_image())
+
+        assert score == pytest.approx(0.05)

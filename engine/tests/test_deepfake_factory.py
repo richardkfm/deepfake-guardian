@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from deepfake.factory import StubDetector, get_detector, reset_detector
+from deepfake.factory import StubDetector, build_provider, get_detector, reset_detector
 
 
 @pytest.fixture(autouse=True)
@@ -96,3 +96,53 @@ class TestFactory:
             det1 = get_detector()
             det2 = get_detector()
         assert det1 is det2
+
+
+class TestBuildProvider:
+    def test_stub(self):
+        assert isinstance(build_provider("stub"), StubDetector)
+
+    def test_openai_prompt_override(self):
+        with patch("config.settings") as mock_settings:
+            mock_settings.openai_api_key = "sk-test"
+            mock_settings.openai_model = "gpt-4o"
+            mock_settings.openai_api_base = "https://api.openai.com/v1"
+            det = build_provider("openai", prompt_override="custom prompt")
+        assert det._system_prompt == "custom prompt"
+
+    def test_openai_default_prompt_when_no_override(self):
+        from deepfake.cloud_openai import _SYSTEM_PROMPT
+
+        with patch("config.settings") as mock_settings:
+            mock_settings.openai_api_key = "sk-test"
+            mock_settings.openai_model = "gpt-4o"
+            mock_settings.openai_api_base = "https://api.openai.com/v1"
+            det = build_provider("openai")
+        assert det._system_prompt == _SYSTEM_PROMPT
+
+    def test_ollama_prompt_override(self):
+        with patch("config.settings") as mock_settings:
+            mock_settings.ollama_base_url = "http://localhost:11434"
+            mock_settings.ollama_model = "llava"
+            det = build_provider("ollama", prompt_override="custom prompt")
+        assert det._prompt == "custom prompt"
+
+    def test_unknown_provider_raises(self):
+        with pytest.raises(ValueError):
+            build_provider("does_not_exist")
+
+    def test_custom_without_provider_class_raises(self):
+        with pytest.raises(ValueError):
+            build_provider("custom", provider_class=None)
+
+    def test_custom_with_unimportable_class_raises(self):
+        with pytest.raises(ValueError):
+            build_provider("custom", provider_class="not.a.real.module.Path")
+
+    def test_custom_with_non_detector_class_raises(self):
+        with pytest.raises(ValueError):
+            build_provider("custom", provider_class="builtins.str")
+
+    def test_custom_with_valid_detector_class(self):
+        det = build_provider("custom", provider_class="deepfake.factory.StubDetector")
+        assert isinstance(det, StubDetector)

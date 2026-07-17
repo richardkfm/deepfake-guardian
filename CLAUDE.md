@@ -156,6 +156,80 @@ Each opt-in category honours a `THRESHOLD_<ID>` env override (e.g.
 > of widely-debunked claims/manipulation framing and is tuned to *flag for
 > human review* rather than auto-delete. Tune the patterns for your community.
 
+### Deepfake Detection Layers (`engine/deepfake/layers/`)
+
+Mirrors the Moderation Skills mechanism above, but for the `deepfake_suspect`
+category's *detection backends* rather than text patterns. Each **layer** is a
+human-editable markdown file in `engine/deepfake/layers/<layer_id>.md`
+declaring which provider it wraps and, for prompt-driven vision providers, the
+actual instruction sent to the model — the media equivalent of a `## Patterns`
+regex list. A loader (`layer_loader.py`) parses each file into a
+`DeepfakeLayer`, and a registry (`layer_registry.py`) auto-discovers them and
+caches built provider instances. To retune detection, edit/add one markdown
+file — no Python changes required.
+
+Shipped layers (`layer_id` = provider key unless noted):
+
+| Layer | Provider | Enabled by default? |
+|-------|----------|----------------------|
+| `stub` | `stub` (fixed 0.05) | ✅ yes |
+| `openai` | `openai` (GPT-4o vision) | no |
+| `ollama` | `ollama` (local vision model) | no |
+| `local` | `local` (on-device ONNX) | no |
+| `sightengine` | `sightengine` (cloud API) | no |
+| `api` | `api` (bring-your-own HTTP model) | no |
+
+Layer file format:
+
+```markdown
+---
+layer_id: openai
+display_name: OpenAI Vision (GPT-4o)
+provider: openai            # openai|ollama|local|sightengine|api|stub|custom
+enabled: false               # manifest-declared default active state
+weight: 1.0                  # used by the weighted_mean combine strategy
+order: 20
+---
+
+## Description
+Uses OpenAI's GPT-4o vision API to score face crops for deepfake indicators.
+
+## Prompt
+You are an image-forensics expert. Given a photograph of a human face,
+estimate the probability that the image is a deepfake or has been
+AI-generated/manipulated. Respond with ONLY a single floating-point number
+between 0.0 (certainly real) and 1.0 (certainly fake). Do not include any
+other text.
+```
+
+By default no layers are active — the engine runs the legacy single-provider
+path selected by `DEEPFAKE_PROVIDER` (see *Environment Variables* below).
+Setting `DEEPFAKE_LAYERS=openai,local` activates exactly those two layers
+simultaneously (overriding each manifest's own `enabled:` default) and
+combines their per-image scores via `DEEPFAKE_LAYER_COMBINE` (`max` default |
+`mean` | `weighted_mean`, using each layer's `weight`). **If `DEEPFAKE_LAYERS`
+is unset, deepfake detection is driven entirely by the legacy
+`DEEPFAKE_PROVIDER` single-provider mechanism — behaviour is unchanged from
+before this feature existed.** An active layer whose provider is unavailable
+(missing credentials, etc.) is dropped from the combination, not silently
+swapped for `stub` — add `stub` explicitly to `DEEPFAKE_LAYERS` if you want a
+safety-net score.
+
+**Community contribution workflow** (the "update patterns without code
+changes" story): copy `openai.md` → `openai_strict.md`, change `layer_id`,
+retune the `## Prompt` body to describe the new class of manipulation
+artefacts you want to catch, and add `openai_strict` to `DEEPFAKE_LAYERS` —
+zero Python changes. For genuinely new detection logic (not just a tuned
+prompt), set `provider: custom` and `provider_class: your.module.YourDetector`
+pointing at a `deepfake.base.DeepfakeDetector` subclass; layer `.md` files are
+operator/repo-trusted content, same trust boundary as `DEEPFAKE_PROVIDER`
+today — `provider_class` is never reachable from API input.
+
+> **GDPR note:** activating any layer backed by `openai`, `ollama` (remote),
+> `sightengine`, `api`, or `custom` logs a GDPR warning, since face image data
+> may leave your infrastructure. Review data flows before enabling for
+> minors-facing deployments; prefer `local` where possible.
+
 ### `telegram-bot/`
 
 | File | Purpose |
@@ -183,7 +257,7 @@ Lives in `src/`. See its own `README.md` for setup details.
 
 | Area | Status |
 |------|--------|
-| Deepfake detection | ✅ Provider-based: `openai`, `ollama`, `local` (ONNX), `sightengine`, `api`, `stub`. Default: `stub` — set a provider + API key to enable. See `engine/deepfake/` |
+| Deepfake detection | ✅ Provider-based: `openai`, `ollama`, `local` (ONNX), `sightengine`, `api`, `stub`. Default: `stub` — set a provider + API key to enable. See `engine/deepfake/`. ✅ Pluggable multi-layer mechanism (markdown-defined layers, combinable) — see `engine/deepfake/layers/`, opt in via `DEEPFAKE_LAYERS` |
 | Video moderation | ✅ OpenCV frame extraction + per-frame analysis. See `engine/video_processing.py` |
 | Image violence score | ✅ CLIP zero-shot classifier. See `engine/classifiers.py:_get_violence_classifier()` |
 | Tests | ✅ pytest suite with mocked ML models |
@@ -274,6 +348,8 @@ curl -X POST http://localhost:8000/moderate_text \
 | `THRESHOLD_CYBERBULLYING` | `0.65` | Override delete threshold for cyberbullying |
 | `ENABLED_CATEGORIES` | *(empty)* | Comma-separated opt-in moderation skills (e.g. `advertising,political_misinformation`) |
 | `THRESHOLD_<ID>` | *(skill default)* | Override delete threshold for an opt-in category (e.g. `THRESHOLD_ADVERTISING`) |
+| `DEEPFAKE_LAYERS` | *(empty)* | Comma-separated deepfake detection layers to activate (e.g. `openai,local`); unset = legacy `DEEPFAKE_PROVIDER` behaviour |
+| `DEEPFAKE_LAYER_COMBINE` | `max` | How multiple active layers' scores combine: `max` / `mean` / `weighted_mean` |
 
 ### Telegram bot (`telegram-bot/.env`)
 

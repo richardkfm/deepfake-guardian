@@ -72,6 +72,19 @@ class Settings:
         self.deepfake_provider: str = os.getenv("DEEPFAKE_PROVIDER", "stub")
         self.deepfake_model_path: str = os.getenv("DEEPFAKE_MODEL_PATH", "")
 
+        # Pluggable deepfake detection layers (engine/deepfake/layers/*.md).
+        # Comma-separated list of layer ids to activate; OVERRIDES each layer
+        # manifest's own `enabled:` default when set. Empty/unset = 100%
+        # legacy single-provider behaviour driven by DEEPFAKE_PROVIDER above
+        # (the default, fully backward compatible).
+        self.deepfake_layers: list[str] = [
+            layer.strip()
+            for layer in os.getenv("DEEPFAKE_LAYERS", "").split(",")
+            if layer.strip()
+        ]
+        # How multiple active layers' scores combine: max | mean | weighted_mean
+        self.deepfake_layer_combine: str = os.getenv("DEEPFAKE_LAYER_COMBINE", "max")
+
         # OpenAI provider (DEEPFAKE_PROVIDER=openai)
         self.openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
         self.openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o")

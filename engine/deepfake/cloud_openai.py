@@ -34,16 +34,18 @@ class OpenAIDetector(DeepfakeDetector):
 
     name = "openai"
 
-    def __init__(self) -> None:
+    def __init__(self, *, prompt: str | None = None) -> None:
         from config import settings
 
         self._api_key: str = getattr(settings, "openai_api_key", "")
         self._model: str = getattr(settings, "openai_model", "gpt-4o")
         self._api_base: str = getattr(settings, "openai_api_base", "https://api.openai.com/v1")
+        self._system_prompt: str = prompt if prompt is not None else _SYSTEM_PROMPT
 
         if self.is_available():
-            logger.info(
-                "OpenAI deepfake provider active (model=%s, base=%s)",
+            logger.warning(
+                "GDPR notice: OpenAI deepfake provider is active (model=%s, base=%s). "
+                "Face images will be sent to OpenAI's servers.",
                 self._model,
                 self._api_base,
             )
@@ -68,7 +70,7 @@ class OpenAIDetector(DeepfakeDetector):
                     json={
                         "model": self._model,
                         "messages": [
-                            {"role": "system", "content": _SYSTEM_PROMPT},
+                            {"role": "system", "content": self._system_prompt},
                             {
                                 "role": "user",
                                 "content": [

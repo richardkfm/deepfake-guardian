@@ -31,11 +31,12 @@ class OllamaDetector(DeepfakeDetector):
 
     name = "ollama"
 
-    def __init__(self) -> None:
+    def __init__(self, *, prompt: str | None = None) -> None:
         from config import settings
 
         self._base_url: str = getattr(settings, "ollama_base_url", "http://localhost:11434")
         self._model: str = getattr(settings, "ollama_model", "llava")
+        self._prompt: str = prompt if prompt is not None else _PROMPT
 
         if self.is_available():
             logger.info(
@@ -59,7 +60,7 @@ class OllamaDetector(DeepfakeDetector):
                     f"{self._base_url}/api/generate",
                     json={
                         "model": self._model,
-                        "prompt": _PROMPT,
+                        "prompt": self._prompt,
                         "images": [b64],
                         "stream": False,
                     },

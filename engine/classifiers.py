@@ -281,10 +281,10 @@ def detect_deepfake_suspect(image: Image.Image) -> float:
     Pipeline:
       1. Extract faces from the image using MediaPipe.
       2. If no faces found, return 0.05 (no face = unlikely deepfake).
-      3. Run the configured deepfake detector on each face crop.
-      4. Return the maximum score across all detected faces.
-
-    The detector provider is selected via the ``DEEPFAKE_PROVIDER`` env var.
+      3. Run either the single legacy provider (``DEEPFAKE_PROVIDER``) or, if
+         ``DEEPFAKE_LAYERS`` is set, every active detection layer — combining
+         their scores per ``DEEPFAKE_LAYER_COMBINE``.
+      4. Return the resulting score.
 
     Args:
         image: A PIL RGB image.
@@ -293,12 +293,22 @@ def detect_deepfake_suspect(image: Image.Image) -> float:
         A float between 0.0 and 1.0 indicating deepfake likelihood.
     """
     from deepfake.face_extractor import extract_faces
-    from deepfake.factory import get_detector
 
     faces = extract_faces(image)
     if not faces:
         logger.debug("No faces detected — returning baseline deepfake score 0.05")
         return 0.05
+
+    from config import settings
+
+    if settings.deepfake_layers:
+        return _detect_deepfake_multi_layer(faces, settings.deepfake_layers)
+    return _detect_deepfake_legacy(faces)
+
+
+def _detect_deepfake_legacy(faces: list[Image.Image]) -> float:
+    """Single-provider path: today's ``DEEPFAKE_PROVIDER`` behaviour, unchanged."""
+    from deepfake.factory import get_detector
 
     detector = get_detector()
     scores = detector.detect(faces)
@@ -312,5 +322,51 @@ def detect_deepfake_suspect(image: Image.Image) -> float:
         len(faces),
         result,
         detector.name,
+    )
+    return result
+
+
+def _detect_deepfake_multi_layer(faces: list[Image.Image], enabled_ids: list[str]) -> float:
+    """Multi-layer path: run every active layer and combine their scores.
+
+    A layer id in ``DEEPFAKE_LAYERS`` with no matching manifest, or an
+    unavailable/broken layer, does NOT fall back to the legacy single-provider
+    path — it's simply excluded from the combination (or, if none are usable,
+    the baseline 0.05 is returned). Falling back silently would turn a typo in
+    ``DEEPFAKE_LAYERS`` into a hard-to-notice behaviour change.
+    """
+    from config import settings
+    from deepfake.combine import combine_scores
+    from deepfake.layer_registry import DeepfakeLayerRegistry
+
+    layers = DeepfakeLayerRegistry.active_layers(enabled_ids)
+    if not layers:
+        logger.warning(
+            "DEEPFAKE_LAYERS=%s matched no known deepfake layers — returning baseline 0.05",
+            enabled_ids,
+        )
+        return 0.05
+
+    per_layer: dict[str, float] = {}
+    for layer in layers:
+        detector = DeepfakeLayerRegistry.get_detector_for(layer)
+        if detector is None:
+            continue
+        scores = detector.detect(faces)
+        if scores:
+            per_layer[layer.layer_id] = max(scores)
+
+    if not per_layer:
+        logger.warning(
+            "No active deepfake layer produced a usable detector — returning baseline 0.05"
+        )
+        return 0.05
+
+    result = combine_scores(per_layer, layers, settings.deepfake_layer_combine)
+    logger.info(
+        "Deepfake detection (multi-layer): %d face(s), layers=%s, combined=%.3f",
+        len(faces),
+        per_layer,
+        result,
     )
     return result
