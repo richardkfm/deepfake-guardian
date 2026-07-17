@@ -73,6 +73,25 @@ class TestModerateImage:
         # No faces in a 10x10 red image → baseline score 0.05
         assert resp.json()["scores"]["deepfake_suspect"] == pytest.approx(0.05)
 
+    def test_sexualised_deepfake_escalates_sexual_violence_and_deletes(
+        self, client, small_image_b64
+    ):
+        """A sexualised image of a deepfaked face (non-consensual intimate
+        imagery / "revenge porn") should score well above the plain NSFW
+        heuristic and be deleted under the default profile."""
+        with (
+            patch("routes.classify_image", return_value={
+                "violence": 0.0, "sexual_violence": 0.45, "nsfw": 0.9,
+            }),
+            patch("routes.detect_deepfake_suspect", return_value=0.9),
+        ):
+            resp = client.post("/moderate_image", json={"image_base64": small_image_b64})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["scores"]["sexual_violence"] == pytest.approx(0.81)
+        assert body["verdict"] == "delete"
+        assert "sexual_violence" in body["reasons"]
+
 
 class TestModerateVideo:
     def test_video_with_no_frames_returns_allow(self, client):

@@ -82,6 +82,17 @@ GET  /health          (health check)
 `scores.extra` holds scores for any enabled **opt-in** categories (see
 *Moderation Skills* below); it is empty unless `ENABLED_CATEGORIES` is set.
 
+**Deepfake sexual violence ("revenge porn") detection:** for images and
+video, `sexual_violence` is not just the plain NSFW heuristic — it is
+`max(nsfw_heuristic, nsfw_score * deepfake_score)`
+(`classifiers.score_deepfake_sexual_violence`). This means a sexualised
+frame whose face also scores highly on `deepfake_suspect` (an AI-generated
+or manipulated intimate image of a real person, used without consent) is
+scored — and can be deleted — as sexual violence even when the raw NSFW
+score alone would only warrant a flag. See
+`engine/moderation/skills/sexual_violence.md` for the rationale and
+user-facing messaging.
+
 **Verdict logic** (`verdict.py`):
 - Score ≥ threshold → `"delete"` (reason added to list)
 - Any score ≥ 0.4 but below threshold → `"flag"`

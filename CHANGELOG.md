@@ -14,6 +14,13 @@ and [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`).
 ## [Unreleased]
 
 ### Added
+- **Deepfake sexual violence ("revenge porn") detection** — image and video
+  moderation now escalate the `sexual_violence` score when a sexualised
+  frame's face also scores highly on `deepfake_suspect`, catching
+  AI-generated non-consensual intimate imagery of real people rather than
+  relying on the plain NSFW heuristic alone. See
+  `classifiers.score_deepfake_sexual_violence` and
+  `engine/moderation/skills/sexual_violence.md`.
 - `CLAUDE.md` — full technical orientation for Claude and contributors: architecture,
   file-level descriptions, current limitations, roadmap summary, env variable reference,
   code conventions, and security notes.

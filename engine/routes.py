@@ -4,7 +4,13 @@ from __future__ import annotations
 import structlog
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
-from classifiers import classify_image, classify_text, decode_image, detect_deepfake_suspect
+from classifiers import (
+    classify_image,
+    classify_text,
+    decode_image,
+    detect_deepfake_suspect,
+    score_deepfake_sexual_violence,
+)
 from gdpr import log_moderation_event
 from models import (
     ImageRequest,
@@ -103,10 +109,14 @@ async def moderate_image(
 
     img_scores = classify_image(image)
     deepfake_score = detect_deepfake_suspect(image)
+    sexual_violence_score = max(
+        img_scores["sexual_violence"],
+        score_deepfake_sexual_violence(img_scores["nsfw"], deepfake_score),
+    )
 
     scores = ModerationScores(
         violence=img_scores["violence"],
-        sexual_violence=img_scores["sexual_violence"],
+        sexual_violence=sexual_violence_score,
         nsfw=img_scores["nsfw"],
         deepfake_suspect=deepfake_score,
         cyberbullying=0.0,

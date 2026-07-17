@@ -9,12 +9,29 @@ flag_threshold: 0.4
 ---
 
 ## Description
-Sexual content combined with violence or coercion. The score is derived from
-the sexual-content signal of the ML classifiers (see `classifiers.py`); this
-file holds its thresholds and user-facing messages.
+Sexual content combined with violence or coercion. For text the score is
+derived from the sexual-content signal of the ML classifiers (see
+`classifiers.py`); this file holds its thresholds and user-facing messages.
+
+For images and video, this score also captures **AI-generated non-consensual
+intimate imagery ("revenge porn" deepfakes)**: a sexualised image whose face
+also scores highly on `deepfake_suspect` (see `deepfake.md`) is treated as
+sexual violence even when the raw NSFW signal alone would only warrant a
+flag. The combined score is `nsfw_score * deepfake_score`
+(`classifiers.score_deepfake_sexual_violence`), so a media item needs *both*
+a strong sexual-content signal and a strong deepfake signal to escalate —
+this specifically targets non-consensual sexualised deepfakes of real
+people, not ordinary sexual content or ordinary deepfakes.
 
 ## Educational message (en)
-This message contains sexual or violent content.
+This message contains sexual or violent content. It may also depict a
+manipulated or AI-generated (deepfake) image used without the depicted
+person's consent ("revenge porn"), which can be a serious violation and, in
+many jurisdictions, a crime.
 
 ## Educational message (de)
-Diese Nachricht enthält sexuelle oder gewalttätige Inhalte.
+Diese Nachricht enthält sexuelle oder gewalttätige Inhalte. Es könnte sich
+auch um ein manipuliertes oder KI-generiertes (Deepfake-)Bild handeln, das
+ohne die Zustimmung der abgebildeten Person verwendet wird ("Rachepornografie"),
+was eine schwerwiegende Verletzung und in vielen Rechtsordnungen eine
+Straftat darstellen kann.
