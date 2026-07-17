@@ -23,6 +23,16 @@ a strong sexual-content signal and a strong deepfake signal to escalate —
 this specifically targets non-consensual sexualised deepfakes of real
 people, not ordinary sexual content or ordinary deepfakes.
 
+A separate, deterministic path exists alongside this statistical one:
+opt-in known-image hash matching (`KNOWN_IMAGE_HASH_MATCHING`, see
+`engine/known_content.py`) lets a victim or admin register the perceptual
+hash of a specific non-consensual image; any future upload matching that
+hash — including deepfakes derived from it, re-crops, or re-encodes — is
+force-deleted with reason `known_ncii_match`, bypassing thresholds
+entirely. That path confirms *this exact image was previously flagged*;
+this file's score-based path catches *unseen but statistically similar*
+sexualised-deepfake content.
+
 ## Educational message (en)
 This message contains sexual or violent content. It may also depict a
 manipulated or AI-generated (deepfake) image used without the depicted

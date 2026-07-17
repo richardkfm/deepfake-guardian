@@ -30,7 +30,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import get_session
-from db_models import ConsentRecord, DeletionRequest, ModerationEvent, UserWarning
+from db_models import (
+    ConsentRecord,
+    DeletionRequest,
+    ModerationEvent,
+    ProtectedImageHash,
+    UserWarning,
+)
 
 logger = structlog.get_logger()
 
@@ -108,6 +114,11 @@ async def process_pending_deletions(session: AsyncSession) -> int:
         )
         await session.execute(
             delete(ConsentRecord).where(ConsentRecord.user_id_hash == req.requester_hash)
+        )
+        await session.execute(
+            delete(ProtectedImageHash).where(
+                ProtectedImageHash.submitter_hash == req.requester_hash
+            )
         )
         req.status = "completed"
         req.completed_date = now

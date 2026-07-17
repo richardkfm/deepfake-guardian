@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from PIL import Image
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from classifiers import (
     classify_image,
@@ -11,6 +13,7 @@ from classifiers import (
     detect_deepfake_suspect,
     score_deepfake_sexual_violence,
 )
+from database import get_session
 from gdpr import log_moderation_event
 from models import (
     ImageRequest,
@@ -23,6 +26,36 @@ from verdict import decide
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Helper: known-NCII-hash override
+# ---------------------------------------------------------------------------
+
+
+async def _apply_known_hash_override(
+    session: AsyncSession, images: list[Image.Image], result: ModerationResult
+) -> ModerationResult:
+    """Force a "delete" verdict if any image matches a protected NCII hash.
+
+    No-op unless ``KNOWN_IMAGE_HASH_MATCHING`` is enabled — see config.py.
+    A match is a strong, victim/admin-confirmed signal, so it overrides the
+    ML-derived verdict rather than merely nudging a score.
+    """
+    from config import settings
+
+    if not settings.known_image_hash_matching:
+        return result
+
+    from known_content import find_match
+
+    for image in images:
+        match = await find_match(session, image, settings.known_image_hash_threshold)
+        if match is not None:
+            logger.info("known_ncii_hash_match", protected_id=match.id)
+            reasons = list(dict.fromkeys([*result.reasons, "known_ncii_match"]))
+            return result.model_copy(update={"verdict": "delete", "reasons": reasons})
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +133,10 @@ async def moderate_text(
 
 @router.post("/moderate_image", response_model=ModerationResult)
 async def moderate_image(
-    request: Request, req: ImageRequest, background_tasks: BackgroundTasks
+    request: Request,
+    req: ImageRequest,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
 ) -> ModerationResult:
     """Classify an image and return a moderation verdict."""
     image = decode_image(req.image_base64, req.image_url)
@@ -122,6 +158,7 @@ async def moderate_image(
         cyberbullying=0.0,
     )
     result = decide(scores)
+    result = await _apply_known_hash_override(session, [image], result)
     logger.info(
         "image_moderation",
         verdict=result.verdict,
@@ -146,7 +183,10 @@ async def moderate_image(
 
 @router.post("/moderate_video", response_model=ModerationResult)
 async def moderate_video(
-    request: Request, req: VideoRequest, background_tasks: BackgroundTasks
+    request: Request,
+    req: VideoRequest,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
 ) -> ModerationResult:
     """Classify a video by sampling frames and aggregating scores."""
     if not req.video_base64 and not req.video_url:
@@ -180,6 +220,7 @@ async def moderate_video(
         cyberbullying=0.0,
     )
     result = decide(scores)
+    result = await _apply_known_hash_override(session, frames, result)
     logger.info(
         "video_moderation",
         verdict=result.verdict,

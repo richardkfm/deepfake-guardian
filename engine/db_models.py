@@ -91,6 +91,31 @@ class ConsentRecord(Base):
     )
 
 
+class ProtectedImageHash(Base):
+    """A perceptual hash of an image a victim/admin wants proactively blocked.
+
+    Mirrors the StopNCII.org model for non-consensual intimate imagery
+    (NCII): only a perceptual hash of the image is stored, never the image
+    itself, so a matching upload can be detected and deleted without the
+    engine ever holding the sensitive content. Rows persist until the
+    submitter deletes them (or exercises Article 17 erasure) — unlike
+    :class:`ModerationEvent`, this is protective data the submitter opted
+    into keeping, not an audit log subject to the retention window.
+    """
+
+    __tablename__ = "protected_image_hashes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    hash_hex: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    hash_type: Mapped[str] = mapped_column(String(16), nullable=False, default="phash")
+    submitter_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    platform: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class DeletionRequest(Base):
     """Article 17 — Right to Erasure request.
 

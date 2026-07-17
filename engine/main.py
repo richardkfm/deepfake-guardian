@@ -17,6 +17,7 @@ from slowapi.util import get_remote_address
 from config import settings
 from database import AsyncSessionLocal, init_db
 from gdpr import gdpr_router, process_pending_deletions, run_retention_cleanup
+from known_content import protected_images_router
 from routes import router
 from warn import warnings_router
 
@@ -84,6 +85,7 @@ app.add_middleware(SlowAPIMiddleware)
 app.include_router(router)
 app.include_router(gdpr_router)
 app.include_router(warnings_router)
+app.include_router(protected_images_router)
 
 
 # ---------------------------------------------------------------------------

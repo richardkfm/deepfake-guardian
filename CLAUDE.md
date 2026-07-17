@@ -51,6 +51,7 @@ The central brain. All bots call this API to get moderation decisions.
 | `profiles.py` | Named threshold profiles (`minors_strict`, `default`, `permissive`) — values now sourced from the skill files |
 | `moderation/` | **Moderation skills** — markdown-defined categories (`skill.py`, `loader.py`, `registry.py`, `skills/*.md`) |
 | `models.py` | Pydantic request/response schemas (`ModerationResult`, `ModerationScores`) |
+| `known_content.py` | Opt-in StopNCII-style perceptual-hash matching for known NCII images (`/protected_images`) — see *Known-NCII-Hash Matching* below |
 | `config.py` | `Settings` class — all config from env vars with sane defaults |
 | `requirements.txt` | Python dependencies |
 | `Dockerfile` | Container image |
@@ -241,6 +242,44 @@ today — `provider_class` is never reachable from API input.
 > may leave your infrastructure. Review data flows before enabling for
 > minors-facing deployments; prefer `local` where possible.
 
+### Known-NCII-Hash Matching (`engine/known_content.py`)
+
+Complements the statistical `sexual_violence`/`deepfake_suspect` scoring
+above with a deterministic, victim/admin-confirmed layer: a **StopNCII.org
+-style perceptual-hash registry**. A victim (or an admin acting on their
+behalf) submits an image once via `POST /protected_images`; the engine
+computes its perceptual hash (`imagehash.phash`, 64-bit) and stores **only
+the hash** — the image itself is decoded, hashed, and discarded, never
+persisted. Every subsequent `/moderate_image` and `/moderate_video` call
+hashes the incoming media and compares it (Hamming distance) against the
+stored hashes; a close match — including re-crops, re-encodes, and
+re-compressions of the same photo, which is exactly the "identity theft
+via redistribution" pattern this is meant to catch — forces a `"delete"`
+verdict with reason `known_ncii_match`, overriding whatever the ML scores
+said.
+
+This is **opt-in** (`KNOWN_IMAGE_HASH_MATCHING=true`, default `false`) since
+it only does anything once operators have populated the protected list, and
+adds the `ImageHash` dependency. `KNOWN_IMAGE_HASH_THRESHOLD` (default `10`)
+sets the max Hamming distance still considered a match — lower is stricter.
+
+API endpoints (mounted at `/protected_images`):
+```
+POST   /protected_images        {"image_base64|image_url", "user_id", "platform", "note"?}
+DELETE /protected_images/{id}   {"user_id", "platform"}   — submitter-only
+```
+`DELETE` requires the same `(user_id, platform)` that submitted the hash
+(hashed and compared server-side, same as GDPR `hash_id`) — a mismatch or
+unknown ID both return a generic 404 so existence isn't leaked. Article 17
+erasure (`POST /gdpr/delete_request`) also clears a requester's protected
+hashes automatically (`gdpr.process_pending_deletions`).
+
+**Known limitation:** matching is O(number of protected hashes) per
+moderation call — fine for a community's own protected-image list (tens to
+low hundreds of entries), not a web-scale hash index. There is no
+integration with the real StopNCII.org service; this is a self-hosted,
+GDPR-local equivalent, not a client for their API.
+
 ### `telegram-bot/`
 
 | File | Purpose |
@@ -283,6 +322,7 @@ Lives in `src/`. See its own `README.md` for setup details.
 | Political misinformation detection | ✅ Opt-in skill (conservative, flag-leaning) — conspiracy theories + fake news; messages link fact-checkers |
 | Hate speech / incitement detection | ✅ Opt-in skill — racism, dehumanising generalisations, calls for violence |
 | Self-harm / ED promotion detection | ✅ Opt-in skill (flag-leaning) — messages link crisis helplines |
+| Deepfake sexual violence ("revenge porn") detection | ✅ Statistical: `sexual_violence` escalates when NSFW + `deepfake_suspect` signals combine. ✅ Deterministic: opt-in StopNCII-style protected-hash matching (`KNOWN_IMAGE_HASH_MATCHING`) — see `engine/known_content.py` |
 | Admin dashboard | Not implemented — Phase 5 |
 | WhatsApp GDPR commands | Not implemented — Phase 6 |
 
@@ -361,6 +401,8 @@ curl -X POST http://localhost:8000/moderate_text \
 | `THRESHOLD_<ID>` | *(skill default)* | Override delete threshold for an opt-in category (e.g. `THRESHOLD_ADVERTISING`) |
 | `DEEPFAKE_LAYERS` | *(empty)* | Comma-separated deepfake detection layers to activate (e.g. `openai,local`); unset = legacy `DEEPFAKE_PROVIDER` behaviour |
 | `DEEPFAKE_LAYER_COMBINE` | `max` | How multiple active layers' scores combine: `max` / `mean` / `weighted_mean` |
+| `KNOWN_IMAGE_HASH_MATCHING` | `false` | Enable StopNCII-style protected-image hash matching (see `engine/known_content.py`); a match forces `delete` |
+| `KNOWN_IMAGE_HASH_THRESHOLD` | `10` | Max Hamming distance (of 64 bits) still considered a match |
 
 ### Telegram bot (`telegram-bot/.env`)
 

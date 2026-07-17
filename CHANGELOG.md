@@ -14,6 +14,14 @@ and [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`).
 ## [Unreleased]
 
 ### Added
+- **Known-NCII-hash matching** — a StopNCII.org-style opt-in protective layer
+  (`KNOWN_IMAGE_HASH_MATCHING`, `engine/known_content.py`): a victim or admin
+  registers the perceptual hash of a specific non-consensual image via
+  `POST /protected_images` (the image itself is never stored, only its
+  hash), and any future upload matching that hash — including re-crops,
+  re-encodes, and deepfakes derived from it — is force-deleted with reason
+  `known_ncii_match`, independent of the ML scores. Article 17 erasure
+  requests now also clear a requester's protected hashes.
 - **Deepfake sexual violence ("revenge porn") detection** — image and video
   moderation now escalate the `sexual_violence` score when a sexualised
   frame's face also scores highly on `deepfake_suspect`, catching
