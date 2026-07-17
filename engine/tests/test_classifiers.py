@@ -9,7 +9,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
-from classifiers import classify_image, classify_text, decode_image, detect_deepfake_suspect
+from classifiers import (
+    classify_image,
+    classify_text,
+    decode_image,
+    detect_deepfake_suspect,
+    score_deepfake_sexual_violence,
+)
 
 
 def _make_image(width: int = 10, height: int = 10) -> Image.Image:
@@ -174,6 +180,24 @@ class TestClassifyImage:
         ):
             result = classify_image(_make_image())
         assert result["violence"] == pytest.approx(0.8)
+
+
+class TestScoreDeepfakeSexualViolence:
+    """Combined non-consensual intimate imagery ("revenge porn" deepfake) signal."""
+
+    def test_both_signals_high_yields_high_score(self):
+        assert score_deepfake_sexual_violence(0.9, 0.9) == pytest.approx(0.81)
+
+    def test_low_deepfake_signal_suppresses_score_despite_high_nsfw(self):
+        """Plain (non-deepfaked) NSFW content should not trigger this signal."""
+        assert score_deepfake_sexual_violence(0.9, 0.05) == pytest.approx(0.045)
+
+    def test_low_nsfw_signal_suppresses_score_despite_high_deepfake(self):
+        """A deepfaked but non-sexual image should not trigger this signal."""
+        assert score_deepfake_sexual_violence(0.05, 0.9) == pytest.approx(0.045)
+
+    def test_zero_when_both_signals_absent(self):
+        assert score_deepfake_sexual_violence(0.0, 0.0) == pytest.approx(0.0)
 
 
 class TestDetectDeepfakeSuspect:

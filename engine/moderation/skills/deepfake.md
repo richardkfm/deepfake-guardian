@@ -19,6 +19,11 @@ CLAUDE.md § Deepfake Detection Layers) — this file continues to hold only
 thresholds and messages for the `deepfake_suspect` category, not detection
 logic.
 
+When a deepfaked face also carries a strong sexual-content signal, the
+combined harm — non-consensual intimate imagery / "revenge porn" — is scored
+under the `sexual_violence` category instead (see `sexual_violence.md`), so
+it can be evaluated against that category's (typically stricter) threshold.
+
 ## Educational message (en)
 This media may be a manipulated or AI-generated (deepfake) image or video.
 

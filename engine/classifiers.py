@@ -270,6 +270,19 @@ def classify_image(image: Image.Image) -> dict[str, float]:
     }
 
 
+def score_deepfake_sexual_violence(nsfw_score: float, deepfake_score: float) -> float:
+    """Combined signal for AI-generated non-consensual intimate imagery ("revenge porn").
+
+    A sexualised image of a *deepfaked* face — a real person's likeness pasted
+    into explicit content without consent — is more severe than either the
+    NSFW or the deepfake signal alone. Multiplying the two keeps the score low
+    unless both signals are elevated together, while letting a strong pairing
+    (e.g. nsfw=0.9, deepfake=0.9 -> 0.81) clearly outscore the plain NSFW
+    heuristic (nsfw * 0.5) used for ordinary sexual content.
+    """
+    return nsfw_score * deepfake_score
+
+
 # ---------------------------------------------------------------------------
 # Deepfake detection
 # ---------------------------------------------------------------------------

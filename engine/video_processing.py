@@ -121,7 +121,7 @@ def moderate_video_frames(frames: list[Image.Image]) -> dict[str, float]:
     Returns:
         Dict with keys: violence, sexual_violence, nsfw, deepfake_suspect.
     """
-    from classifiers import classify_image, detect_deepfake_suspect
+    from classifiers import classify_image, detect_deepfake_suspect, score_deepfake_sexual_violence
 
     aggregate: dict[str, float] = {
         "violence": 0.0,
@@ -133,12 +133,15 @@ def moderate_video_frames(frames: list[Image.Image]) -> dict[str, float]:
     for frame in frames:
         img_scores = classify_image(frame)
         df_score = detect_deepfake_suspect(frame)
+        nsfw_score = img_scores.get("nsfw", 0.0)
+        frame_sexual_violence = max(
+            img_scores.get("sexual_violence", 0.0),
+            score_deepfake_sexual_violence(nsfw_score, df_score),
+        )
 
         aggregate["violence"] = max(aggregate["violence"], img_scores.get("violence", 0.0))
-        aggregate["sexual_violence"] = max(
-            aggregate["sexual_violence"], img_scores.get("sexual_violence", 0.0)
-        )
-        aggregate["nsfw"] = max(aggregate["nsfw"], img_scores.get("nsfw", 0.0))
+        aggregate["sexual_violence"] = max(aggregate["sexual_violence"], frame_sexual_violence)
+        aggregate["nsfw"] = max(aggregate["nsfw"], nsfw_score)
         aggregate["deepfake_suspect"] = max(aggregate["deepfake_suspect"], df_score)
 
     return aggregate

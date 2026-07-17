@@ -121,3 +121,23 @@ class TestModerateVideoFrames:
         result = moderate_video_frames([])
         assert result["violence"] == 0.0
         assert result["deepfake_suspect"] == 0.0
+
+    def test_sexual_violence_escalates_for_sexualised_deepfake_frame(self):
+        """A frame with high nsfw + high deepfake score is non-consensual
+        intimate imagery ("revenge porn" deepfake) and should escalate the
+        sexual_violence score above the plain NSFW heuristic."""
+        frame = Image.new("RGB", (10, 10))
+
+        # sexual_violence heuristic (nsfw * 0.5) alone would be 0.45, but the
+        # combined deepfake signal (nsfw * deepfake = 0.81) should win out.
+        img_scores = {"violence": 0.0, "sexual_violence": 0.45, "nsfw": 0.9}
+        df_score = 0.9
+
+        with (
+            patch("classifiers.classify_image", return_value=img_scores),
+            patch("classifiers.detect_deepfake_suspect", return_value=df_score),
+        ):
+            result = moderate_video_frames([frame])
+
+        assert result["sexual_violence"] == pytest.approx(0.81)
+        assert result["deepfake_suspect"] == pytest.approx(0.9)
