@@ -106,6 +106,23 @@ class Settings:
         self.max_frames: int = int(os.getenv("MAX_FRAMES", "10"))
         self.max_video_duration: int = int(os.getenv("MAX_VIDEO_DURATION", "300"))
 
+        # Known non-consensual intimate imagery (NCII) hash matching — opt-in.
+        # When enabled, incoming images/video frames are perceptually hashed
+        # and compared against victim/admin-submitted protected hashes (see
+        # known_content.py); a match forces a "delete" verdict regardless of
+        # the ML scores. Off by default: it adds a dependency (ImageHash) and
+        # requires operators to have actually populated the protected list.
+        self.known_image_hash_matching: bool = os.getenv(
+            "KNOWN_IMAGE_HASH_MATCHING", "false"
+        ).strip().lower() in ("1", "true", "yes")
+        # Max Hamming distance (out of 64 bits for phash) still considered a
+        # match. Lower = stricter (fewer false positives, more false
+        # negatives on cropped/re-encoded re-uploads). 10 is a common
+        # near-duplicate-detection default.
+        self.known_image_hash_threshold: int = int(
+            os.getenv("KNOWN_IMAGE_HASH_THRESHOLD", "10")
+        )
+
         # GDPR / persistence
         self.database_url: str = os.getenv(
             "DATABASE_URL", "sqlite+aiosqlite:///./deepfake_guardian.db"
