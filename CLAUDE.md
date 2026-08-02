@@ -61,7 +61,17 @@ The central brain. All bots call this API to get moderation decisions.
 POST /moderate_text   {"text": "..."}
 POST /moderate_image  {"image_base64": "..." | "image_url": "..."}
 POST /moderate_video  {"video_base64": "..." | "video_url": "..."}
-GET  /health          (health check)
+GET  /health          (health check + active deepfake detector status)
+```
+
+`/health` reports which deepfake detector is actually running, so a silent
+fallback to the stub (detection effectively off) is visible without reading
+logs:
+
+```json
+{"status": "ok",
+ "deepfake": {"mode": "provider", "configured": "sightengine",
+              "active": "stub", "degraded": true}}
 ```
 
 **Response shape** (`ModerationResult`):
@@ -399,6 +409,8 @@ curl -X POST http://localhost:8000/moderate_text \
 | `THRESHOLD_CYBERBULLYING` | `0.65` | Override delete threshold for cyberbullying |
 | `ENABLED_CATEGORIES` | *(empty)* | Comma-separated opt-in moderation skills (e.g. `advertising,political_misinformation`) |
 | `THRESHOLD_<ID>` | *(skill default)* | Override delete threshold for an opt-in category (e.g. `THRESHOLD_ADVERTISING`) |
+| `DEEPFAKE_PROVIDER` | `stub` | Deepfake backend (`openai`/`ollama`/`local`/`sightengine`/`api`/`stub`). The `stub` default means **no deepfake detection** until changed |
+| `DEEPFAKE_REQUIRE_PROVIDER` | `false` | Raise `DeepfakeProviderUnavailable` instead of silently falling back to the stub when the provider is unavailable |
 | `DEEPFAKE_LAYERS` | *(empty)* | Comma-separated deepfake detection layers to activate (e.g. `openai,local`); unset = legacy `DEEPFAKE_PROVIDER` behaviour |
 | `DEEPFAKE_LAYER_COMBINE` | `max` | How multiple active layers' scores combine: `max` / `mean` / `weighted_mean` |
 | `KNOWN_IMAGE_HASH_MATCHING` | `false` | Enable StopNCII-style protected-image hash matching (see `engine/known_content.py`); a match forces `delete` |

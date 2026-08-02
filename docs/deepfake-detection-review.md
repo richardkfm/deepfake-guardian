@@ -5,6 +5,12 @@
 `engine/classifiers.py` (`detect_deepfake_suspect`), `engine/video_processing.py`,
 `engine/routes.py` (image/video endpoints), related docs and tests.
 
+> **Status update (2026-08-02):** findings 1, 2, 3, 6 and most of 7 are now
+> resolved — see the per-finding notes below. Findings 4 (blocking sync HTTP in
+> async endpoints) and 5 (group-photo blind spot) remain **open** and were
+> deliberately deferred: both are behavioural changes that need their own
+> review, and 5 needs accuracy evaluation against real media.
+
 **Test status at review time:** all 68 deepfake-related unit tests pass
 (`test_deepfake_factory`, `test_face_extractor`, `test_local_detector`,
 `test_cloud_detector`, `test_classifiers`, `test_video_processing`). The suite
@@ -34,7 +40,7 @@ on cloud providers fit the project's audience.
 
 ## Findings (most important first)
 
-### 1. Silent fail-open to the stub detector — **high**
+### 1. Silent fail-open to the stub detector — **high** — ✅ resolved
 
 If a provider is misconfigured or unavailable, `get_detector()` falls back to
 `StubDetector` with only a log warning (`deepfake/factory.py:67-73`). The stub
@@ -45,7 +51,13 @@ system appears healthy. For a child-safety tool this should be loud:
 - Optionally add a fail-fast setting (`DEEPFAKE_REQUIRE_PROVIDER=true`) that
   refuses to start when the configured provider is unavailable.
 
-### 2. The `local` provider's advertised auto-download does not exist — **high**
+> **Resolved.** `GET /health` now returns a `deepfake` block reporting the
+> configured vs. active detector and a `degraded` flag
+> (`deepfake/factory.py:active_detector_status`). `DEEPFAKE_REQUIRE_PROVIDER=true`
+> raises `DeepfakeProviderUnavailable` instead of falling back; the fallback
+> warning now spells out that detection is disabled.
+
+### 2. The `local` provider's advertised auto-download does not exist — **high** — ✅ resolved
 
 `docs/deepfake-detection.md` ("Downloads a ~50 MB ONNX model on first use")
 and `engine/.env.example` ("auto-downloaded if empty") both promise an
@@ -62,7 +74,13 @@ Either ship a downloader (with a pinned URL **and checksum verification**) or
 correct the docs to say the model must be provided manually via
 `DEEPFAKE_MODEL_PATH`.
 
-### 3. Errors score 0.0 — below the "no face" baseline — **medium/high**
+> **Resolved** by correcting the docs (no downloader shipped).
+> `docs/deepfake-detection.md`, `engine/.env.example`, and
+> `docs/configuration.md` now state the model must be supplied by the
+> operator, and `LocalOnnxDetector.is_available()` logs the path it checked.
+> The conflicting ~20 MB/~50 MB size claims were dropped.
+
+### 3. Errors score 0.0 — below the "no face" baseline — **medium/high** — ✅ resolved
 
 All cloud providers append `0.0` when the API call fails or the response
 can't be parsed (`cloud_openai.py:96-101`, `cloud_ollama.py:74-79`,
@@ -74,7 +92,14 @@ on any answer like `"Probability: 0.7"`, which then fails open.
 Suggestion: on error, return at least the 0.05 baseline — or better, a
 sentinel that the route can turn into a "flag for human review" verdict.
 
-### 4. Blocking synchronous HTTP inside async endpoints — **medium/high**
+> **Resolved** via the baseline route. All four providers now fall back to
+> `deepfake.base.BASELINE_SCORE` (0.05) on error or unreadable response, and
+> `parse_llm_score()` extracts the first float from replies like
+> `"Probability: 0.7"` instead of discarding them. A provider that genuinely
+> returns 0.0 still scores 0.0 — `_extract_nested` and the SightEngine lookup
+> return `None` for a missing field rather than collapsing it to 0.0.
+
+### 4. Blocking synchronous HTTP inside async endpoints — **medium/high** — ⏳ open (deferred)
 
 `moderate_image` / `moderate_video` are `async def`, but every provider uses
 blocking `httpx.post` with 30–60 s timeouts, sequentially per face. Worst
@@ -85,7 +110,7 @@ blocked the whole time — one slow moderation call stalls the entire engine.
 Suggestion: use `httpx.AsyncClient`, or run detection in a threadpool
 (`run_in_executor` / `fastapi.concurrency.run_in_threadpool`).
 
-### 5. Group photos are a blind spot — **medium**
+### 5. Group photos are a blind spot — **medium** — ⏳ open (deferred)
 
 `face_extractor.py` uses MediaPipe with `model_selection=0` (short-range,
 optimised for selfies < 2 m) and skips faces smaller than 3 % of the image
@@ -93,7 +118,7 @@ optimised for selfies < 2 m) and skips faces smaller than 3 % of the image
 small/distant faces are common; missed faces mean the image returns 0.05 →
 allow. Consider `model_selection=1` (full-range), or run both and merge.
 
-### 6. LLM-as-forensics is a weak signal — **medium**
+### 6. LLM-as-forensics is a weak signal — **medium** — ✅ resolved
 
 GPT-4o / llava are not calibrated deepfake detectors; asking them for a
 probability yields plausible-sounding but unreliable numbers. Acceptable as a
@@ -101,22 +126,34 @@ heuristic, but `docs/deepfake-detection.md` presents OpenAI as the "easiest"
 option with no accuracy caveat — and verdicts auto-delete at 0.7. Add a
 caveat, and consider recommending flag-only operation for LLM providers.
 
-### 7. Smaller items — **low**
+> **Resolved.** Options A and B in `docs/deepfake-detection.md` now carry an
+> accuracy caveat recommending flag-only operation (`THRESHOLD_DEEPFAKE=1.1`)
+> until measured on your own content.
 
-- **Doc bug:** `engine/README.md` claims `local` is the default provider; the
+### 7. Smaller items — **low** — partly resolved
+
+- ✅ **Doc bug:** `engine/README.md` claims `local` is the default provider; the
   actual default is `stub` (`config.py:72`).
-- **SSRF vector:** `image_url` / `video_url` are fetched server-side with no
+  *Resolved — the table now marks `stub` as the default and lists the missing
+  `openai`/`ollama` rows.*
+- ⏳ **SSRF vector:** `image_url` / `video_url` are fetched server-side with no
   host/IP restrictions. Mitigated by the API-key middleware, but worth
   blocking private address ranges if the engine is ever exposed.
-- **Detector cache never re-checks:** the singleton is cached for the process
+  *Open — deferred as a separate security change.*
+- ⏳ **Detector cache never re-checks:** the singleton is cached for the process
   lifetime, so a provider that comes online later (e.g. Ollama restarts) is
   not picked up until the engine restarts.
-- **ONNX output assumption:** `local_detector.py` treats `outputs[0][0]` as a
+  *Open — `DEEPFAKE_REQUIRE_PROVIDER=true` now makes the failure loud at
+  startup, but the cache itself is unchanged.*
+- ✅ **ONNX output assumption:** `local_detector.py` treats `outputs[0][0]` as a
   single logit and applies sigmoid. If the model actually emits 2-class
   softmax/logits, scores are misinterpreted — unverifiable while the model
   itself is unobtainable (finding 2).
-- **Stale comment:** `cloud_sightengine.py:66` says the API returns
+  *Documented rather than fixed — `docs/deepfake-detection.md` Option C now
+  states the expected single-logit output shape. Still unverifiable.*
+- ✅ **Stale comment:** `cloud_sightengine.py:66` says the API returns
   `{"type_1_score": ...}` while the code reads `deepfake.score`.
+  *Resolved.*
 
 ---
 

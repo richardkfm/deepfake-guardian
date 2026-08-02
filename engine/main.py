@@ -112,8 +112,15 @@ async def require_api_key(request: Request, call_next):  # type: ignore[no-untyp
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, object]:
+    """Liveness plus what deepfake detection is *actually* doing.
+
+    A stub fallback means no deepfake is ever detected, so it has to be
+    visible here rather than only in the startup logs.
+    """
+    from deepfake.factory import active_detector_status
+
+    return {"status": "ok", "deepfake": active_detector_status()}
 
 
 if __name__ == "__main__":

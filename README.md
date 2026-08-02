@@ -26,8 +26,15 @@ the engine checks it with locally-run ML models and returns a verdict:
 | **delete** | Message is removed (or admins are pinged if the bot lacks permission) |
 
 **Detected:** violence · sexual violence · NSFW · cyberbullying · deepfakes —
-plus opt-in categories (advertising/spam, political misinformation). Each
-category is a [human-editable markdown skill](docs/configuration.md#moderation-categories-skills).
+plus opt-in categories (advertising/spam, scams, political misinformation, hate
+speech, self-harm). Each category is a
+[human-editable markdown skill](docs/configuration.md#moderation-categories-skills).
+
+> **Deepfake detection needs a provider.** Out of the box `DEEPFAKE_PROVIDER`
+> is `stub`, which scores every face 0.05 — nothing is ever flagged or deleted
+> as a deepfake until you pick a real provider (OpenAI, Ollama, a local ONNX
+> model, SightEngine, or your own API). The other categories work immediately.
+> See [Deepfake detection](docs/deepfake-detection.md) to turn it on.
 
 **Who it's for:** schools and class chats, youth organisations and sports clubs,
 companies and teams, and any community group that needs moderation. Use

@@ -15,7 +15,7 @@ import logging
 
 from PIL import Image
 
-from deepfake.base import DeepfakeDetector
+from deepfake.base import BASELINE_SCORE, DeepfakeDetector
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +63,18 @@ class SightEngineDetector(DeepfakeDetector):
                 resp.raise_for_status()
                 data = resp.json()
 
-                # SightEngine returns {"type_1_score": 0.xx} for deepfake model
-                score = float(data.get("deepfake", {}).get("score", 0.0))
-                scores.append(score)
+                # SightEngine returns {"deepfake": {"score": 0.xx}}.  A missing
+                # score is a failure, not a 0.0 verdict — fall back to the
+                # baseline rather than reporting the face as certainly real.
+                raw = data.get("deepfake", {}).get("score")
+                if raw is None:
+                    logger.warning("SightEngine response carried no deepfake score")
+                    scores.append(BASELINE_SCORE)
+                else:
+                    scores.append(min(max(float(raw), 0.0), 1.0))
             except Exception:
                 logger.exception("SightEngine API call failed for face crop")
-                scores.append(0.0)
+                scores.append(BASELINE_SCORE)
 
         return scores
 

@@ -72,6 +72,15 @@ class Settings:
         self.deepfake_provider: str = os.getenv("DEEPFAKE_PROVIDER", "stub")
         self.deepfake_model_path: str = os.getenv("DEEPFAKE_MODEL_PATH", "")
 
+        # Refuse to start when the configured deepfake provider is unavailable
+        # instead of silently degrading to the stub detector (which scores every
+        # face 0.05, i.e. detection is off while the engine looks healthy).
+        # Default false to preserve existing behaviour; turn on for
+        # child-safety deployments that must not run blind.
+        self.deepfake_require_provider: bool = os.getenv(
+            "DEEPFAKE_REQUIRE_PROVIDER", "false"
+        ).strip().lower() in ("1", "true", "yes")
+
         # Pluggable deepfake detection layers (engine/deepfake/layers/*.md).
         # Comma-separated list of layer ids to activate; OVERRIDES each layer
         # manifest's own `enabled:` default when set. Empty/unset = 100%

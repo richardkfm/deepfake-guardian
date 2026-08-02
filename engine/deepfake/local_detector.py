@@ -13,11 +13,12 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from deepfake.base import DeepfakeDetector
+from deepfake.base import BASELINE_SCORE, DeepfakeDetector
 
 logger = logging.getLogger(__name__)
 
-# Default model download location
+# Where the model file is looked up when DEEPFAKE_MODEL_PATH is unset.  The
+# engine does not download it — the operator has to put it there.
 _DEFAULT_MODEL_DIR = Path.home() / ".cache" / "deepfake_guardian"
 _MODEL_FILENAME = "efficientnet_b0_deepfake.onnx"
 
@@ -93,8 +94,8 @@ class LocalOnnxDetector(DeepfakeDetector):
         """
         session = self._get_session()
         if session is None:
-            logger.warning("ONNX session unavailable — returning stub scores")
-            return [0.05] * len(face_images)
+            logger.warning("ONNX session unavailable — returning baseline scores")
+            return [BASELINE_SCORE] * len(face_images)
 
         input_name = session.get_inputs()[0].name
         scores: list[float] = []
@@ -109,5 +110,20 @@ class LocalOnnxDetector(DeepfakeDetector):
         return scores
 
     def is_available(self) -> bool:
-        """Check if the ONNX model file exists."""
-        return os.path.isfile(self._model_path)
+        """Check if the ONNX model file exists.
+
+        The model is **not** downloaded automatically — it has to be supplied
+        by the operator via ``DEEPFAKE_MODEL_PATH``.  Log the path that was
+        checked, otherwise the only symptom is a generic "provider not
+        available" from the factory and a silent fall back to the stub.
+        """
+        if os.path.isfile(self._model_path):
+            return True
+
+        logger.warning(
+            "Local ONNX deepfake model not found at '%s' — the engine does not "
+            "download it; provide the file and set DEEPFAKE_MODEL_PATH. This "
+            "provider is unavailable until then.",
+            self._model_path or "<unset>",
+        )
+        return False

@@ -13,6 +13,40 @@ and [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`).
 
 ## [Unreleased]
 
+### Fixed
+- **Deepfake detection no longer fails open silently.** A misconfigured or
+  unavailable provider still falls back to the stub detector (unchanged
+  default), but this is now visible and controllable:
+  - `GET /health` returns a `deepfake` block naming the configured vs. active
+    detector, with `degraded: true` when the stub is standing in for a real
+    provider (or, in layer mode, when no configured layer resolves).
+  - New `DEEPFAKE_REQUIRE_PROVIDER` (default `false`) raises
+    `DeepfakeProviderUnavailable` instead of degrading — recommended for
+    deployments with minors.
+  - The fallback warning now states outright that detection is disabled, and
+    the `local` provider logs the model path it looked for.
+- **Provider failures no longer score below a faceless photo.** All four cloud
+  providers returned `0.0` on an API error or unreadable response — *lower*
+  than the 0.05 "no face detected" baseline, so an outage looked more innocent
+  than an ordinary image. They now fall back to the shared
+  `deepfake.base.BASELINE_SCORE`. A provider that genuinely returns 0.0 still
+  scores 0.0.
+- **LLM replies wrapped in prose are no longer discarded.** `parse_llm_score()`
+  extracts the first float from answers like `"Probability: 0.7"`, which
+  previously raised and fell back to the error score.
+- Documentation corrections: the top-level `README.md` now states that deepfake
+  detection is inert until a provider is chosen; `engine/README.md` no longer
+  claims `local` is the default provider (it is `stub`); the advertised
+  automatic ONNX model download — which was never implemented — has been
+  removed from the docs in favour of supplying the file via
+  `DEEPFAKE_MODEL_PATH`; OpenAI/Ollama now carry an accuracy caveat
+  recommending flag-only operation. See `docs/deepfake-detection-review.md`
+  for the full finding-by-finding status.
+- `engine/.env.example` shipped five uncommented `THRESHOLD_*` values that
+  silently overrode `MODERATION_PROFILE` while the file's own comment said to
+  leave them commented out; they are now commented and match the `default`
+  profile.
+
 ### Added
 - **Known-NCII-hash matching** — a StopNCII.org-style opt-in protective layer
   (`KNOWN_IMAGE_HASH_MATCHING`, `engine/known_content.py`): a victim or admin
