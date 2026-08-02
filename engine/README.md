@@ -38,10 +38,18 @@ Deepfake detection uses a pluggable provider system. Set `DEEPFAKE_PROVIDER` in 
 
 | Provider | Value | Description | Privacy |
 |----------|-------|-------------|---------|
-| **Local ONNX** | `local` (default) | EfficientNet-B0 model, CPU inference | Face data stays on-device |
+| **Stub** | `stub` **(default)** | Fixed score 0.05 — detection effectively **off** | No processing (CI/testing) |
+| **OpenAI** | `openai` | GPT-4o vision | Face images sent to OpenAI |
+| **Ollama** | `ollama` | Local vision model (e.g. `llava`) | Stays on your network |
+| **Local ONNX** | `local` | EfficientNet-B0, CPU inference — model file must be supplied via `DEEPFAKE_MODEL_PATH` | Face data stays on-device |
 | **SightEngine** | `sightengine` | Cloud API | Face images sent to SightEngine |
 | **Custom API** | `api` | Your own HTTP endpoint | Face images sent to your endpoint |
-| **Stub** | `stub` | Fixed score 0.05 | No processing (CI/testing) |
+
+The default is `stub`, so a fresh install never reports a deepfake until you
+choose a provider. If the configured provider turns out to be unavailable
+(missing credentials, missing model file), the engine logs a warning and falls
+back to the stub — `GET /health` reports this as `deepfake.degraded: true`. Set
+`DEEPFAKE_REQUIRE_PROVIDER=true` to refuse to start instead.
 
 ### Pipeline
 

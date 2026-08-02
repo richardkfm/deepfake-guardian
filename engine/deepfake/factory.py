@@ -14,11 +14,19 @@ import logging
 
 from PIL import Image
 
-from deepfake.base import DeepfakeDetector
+from deepfake.base import BASELINE_SCORE, DeepfakeDetector
 
 logger = logging.getLogger(__name__)
 
 _detector: DeepfakeDetector | None = None
+
+
+class DeepfakeProviderUnavailable(RuntimeError):
+    """Raised when the configured provider is unusable and fallback is forbidden.
+
+    Only raised with ``DEEPFAKE_REQUIRE_PROVIDER=true`` — see
+    :func:`get_detector`.
+    """
 
 
 class StubDetector(DeepfakeDetector):
@@ -27,7 +35,7 @@ class StubDetector(DeepfakeDetector):
     name = "stub"
 
     def detect(self, face_images: list[Image.Image]) -> list[float]:
-        return [0.05] * len(face_images)
+        return [BASELINE_SCORE] * len(face_images)
 
     def is_available(self) -> bool:
         return True
@@ -109,7 +117,14 @@ def get_detector() -> DeepfakeDetector:
     """Return the configured deepfake detector (cached singleton).
 
     Reads ``DEEPFAKE_PROVIDER`` from :mod:`config` settings. Falls back to
-    :class:`StubDetector` with a warning if the chosen provider is unavailable.
+    :class:`StubDetector` with a warning if the chosen provider is unavailable
+    — which means deepfake detection is effectively **off** while the engine
+    still looks healthy. Set ``DEEPFAKE_REQUIRE_PROVIDER=true`` to raise
+    :class:`DeepfakeProviderUnavailable` instead of degrading silently.
+
+    Raises:
+        DeepfakeProviderUnavailable: The configured provider is unknown or
+            unavailable and ``DEEPFAKE_REQUIRE_PROVIDER`` is set.
     """
     global _detector
     if _detector is not None:
@@ -118,24 +133,78 @@ def get_detector() -> DeepfakeDetector:
     from config import settings
 
     provider = getattr(settings, "deepfake_provider", "stub")
+    require = getattr(settings, "deepfake_require_provider", False)
 
     try:
         det: DeepfakeDetector = build_provider(provider)
-    except ValueError:
+    except ValueError as exc:
+        if require:
+            raise DeepfakeProviderUnavailable(
+                f"DEEPFAKE_PROVIDER '{provider}' is not a known provider and "
+                "DEEPFAKE_REQUIRE_PROVIDER is set."
+            ) from exc
         logger.warning("Unknown DEEPFAKE_PROVIDER '%s' — falling back to stub", provider)
         det = StubDetector()
 
     if not det.is_available():
+        if require:
+            raise DeepfakeProviderUnavailable(
+                f"Deepfake provider '{det.name}' is not available (check credentials "
+                "and dependencies) and DEEPFAKE_REQUIRE_PROVIDER is set."
+            )
         logger.warning(
             "Deepfake provider '%s' is not available — falling back to stub. "
-            "Check configuration and dependencies.",
+            "Deepfake detection is now effectively DISABLED (every face scores %.2f). "
+            "Check configuration and dependencies, or set DEEPFAKE_REQUIRE_PROVIDER=true "
+            "to fail fast instead.",
             det.name,
+            BASELINE_SCORE,
         )
         det = StubDetector()
 
     _detector = det
     logger.info("Deepfake detector initialised: %s", det.name)
     return _detector
+
+
+def active_detector_status() -> dict[str, object]:
+    """Describe the deepfake detection currently in effect, for ``GET /health``.
+
+    Reports the configured provider or layer set alongside what is *actually*
+    running, so a deployment that silently fell back to the stub is visible
+    without reading logs. Never builds a provider as a side effect — an
+    unbuilt detector is reported as ``"not_initialised"``.
+    """
+    from config import settings
+
+    layers = getattr(settings, "deepfake_layers", [])
+    if layers:
+        status: dict[str, object] = {
+            "mode": "layers",
+            "configured": list(layers),
+            "combine": getattr(settings, "deepfake_layer_combine", "max"),
+        }
+        try:
+            from deepfake.layer_registry import DeepfakeLayerRegistry
+
+            resolved = [ly.layer_id for ly in DeepfakeLayerRegistry.active_layers(list(layers))]
+            status["resolved"] = resolved
+            # A configured id that matches no manifest contributes nothing.
+            status["degraded"] = not resolved
+        except Exception:  # pragma: no cover — /health must never 500
+            logger.exception("Could not resolve deepfake layers for health report")
+        return status
+
+    configured = getattr(settings, "deepfake_provider", "stub")
+    active = _detector.name if _detector is not None else "not_initialised"
+    return {
+        "mode": "provider",
+        "configured": configured,
+        "active": active,
+        # True only once we know detection is inert: the stub is running while
+        # something else was asked for.
+        "degraded": _detector is not None and active == "stub" and configured != "stub",
+    }
 
 
 def reset_detector() -> None:

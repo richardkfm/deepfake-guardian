@@ -69,13 +69,14 @@ Opt-in scores are returned under `scores.extra` in the API response.
 | `THRESHOLD_CYBERBULLYING` | _from profile_ | Override cyberbullying threshold |
 | `ENABLED_CATEGORIES` | _(empty)_ | Opt-in moderation skills, comma-separated |
 | `THRESHOLD_<ID>` | _from skill_ | Override an opt-in category threshold (e.g. `THRESHOLD_ADVERTISING`) |
-| `DEEPFAKE_PROVIDER` | `stub` | `openai` \| `ollama` \| `local` \| `sightengine` \| `api` \| `stub` |
+| `DEEPFAKE_PROVIDER` | `stub` | `openai` \| `ollama` \| `local` \| `sightengine` \| `api` \| `stub`. The `stub` default means **no deepfake detection** until you pick a provider |
+| `DEEPFAKE_REQUIRE_PROVIDER` | `false` | Raise instead of falling back to the stub when the provider is unavailable |
 | `OPENAI_API_KEY` | _(empty)_ | OpenAI key (for `openai` provider) |
 | `OPENAI_MODEL` | `gpt-4o` | OpenAI vision model |
 | `OPENAI_API_BASE` | `https://api.openai.com/v1` | OpenAI-compatible base URL (works with Azure, LiteLLM) |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server (for `ollama` provider) |
 | `OLLAMA_MODEL` | `llava` | Ollama vision model |
-| `DEEPFAKE_MODEL_PATH` | _(auto)_ | ONNX model path (for `local` provider) |
+| `DEEPFAKE_MODEL_PATH` | `~/.cache/deepfake_guardian/efficientnet_b0_deepfake.onnx` | ONNX model path (for `local` provider). Not downloaded — you supply the file |
 | `SIGHTENGINE_API_USER` | _(empty)_ | SightEngine user (for `sightengine` provider) |
 | `SIGHTENGINE_API_SECRET` | _(empty)_ | SightEngine secret |
 | `DEEPFAKE_API_URL` | _(empty)_ | Custom endpoint (for `api` provider) |

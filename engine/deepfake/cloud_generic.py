@@ -11,27 +11,35 @@ import logging
 
 from PIL import Image
 
-from deepfake.base import DeepfakeDetector
+from deepfake.base import BASELINE_SCORE, DeepfakeDetector
 
 logger = logging.getLogger(__name__)
 
+_MISSING = object()
 
-def _extract_nested(data: dict, path: str) -> float:
+
+def _extract_nested(data: dict, path: str) -> float | None:
     """Extract a value from nested dict using dot-separated path.
 
     Example: ``_extract_nested({"result": {"score": 0.9}}, "result.score")``
     returns ``0.9``.
+
+    Returns ``None`` when the path does not resolve to a number, so callers can
+    tell "the API scored this 0.0" apart from "the API didn't give us a score"
+    — the two must not produce the same verdict.
     """
     keys = path.split(".")
     current = data
     for key in keys:
-        if isinstance(current, dict):
-            current = current.get(key, 0.0)
-        else:
-            return 0.0
-    if isinstance(current, dict):
-        return 0.0
-    return float(current)
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key, _MISSING)
+        if current is _MISSING:
+            return None
+    try:
+        return float(current)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 class GenericApiDetector(DeepfakeDetector):
@@ -79,10 +87,16 @@ class GenericApiDetector(DeepfakeDetector):
                 data = resp.json()
 
                 score = _extract_nested(data, self._score_path)
-                scores.append(min(max(score, 0.0), 1.0))
+                if score is None:
+                    logger.warning(
+                        "No deepfake score at path '%s' in API response", self._score_path
+                    )
+                    scores.append(BASELINE_SCORE)
+                else:
+                    scores.append(min(max(score, 0.0), 1.0))
             except Exception:
                 logger.exception("Generic deepfake API call failed for face crop")
-                scores.append(0.0)
+                scores.append(BASELINE_SCORE)
 
         return scores
 

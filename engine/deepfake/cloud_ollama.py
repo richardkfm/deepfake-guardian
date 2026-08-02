@@ -13,7 +13,7 @@ import logging
 
 from PIL import Image
 
-from deepfake.base import DeepfakeDetector
+from deepfake.base import BASELINE_SCORE, DeepfakeDetector, parse_llm_score
 
 logger = logging.getLogger(__name__)
 
@@ -70,14 +70,18 @@ class OllamaDetector(DeepfakeDetector):
                 data = resp.json()
 
                 raw = data.get("response", "").strip()
-                score = float(raw)
-                scores.append(min(max(score, 0.0), 1.0))
+                score = parse_llm_score(raw)
+                if score is None:
+                    logger.warning("Could not parse Ollama deepfake score from response")
+                    scores.append(BASELINE_SCORE)
+                else:
+                    scores.append(min(max(score, 0.0), 1.0))
             except (ValueError, KeyError):
-                logger.warning("Could not parse Ollama deepfake score from response")
-                scores.append(0.0)
+                logger.warning("Unexpected Ollama response shape for deepfake score")
+                scores.append(BASELINE_SCORE)
             except Exception:
                 logger.exception("Ollama deepfake API call failed")
-                scores.append(0.0)
+                scores.append(BASELINE_SCORE)
 
         return scores
 

@@ -12,7 +12,13 @@ class TestHealth:
     def test_health_returns_ok(self, client):
         resp = client.get("/health")
         assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
+        assert resp.json()["status"] == "ok"
+
+    def test_health_reports_deepfake_detection_state(self, client):
+        """A silent stub fallback must be visible without reading the logs."""
+        body = client.get("/health").json()
+        assert "deepfake" in body
+        assert body["deepfake"]["mode"] in ("provider", "layers")
 
     def test_health_no_auth_required(self, client_with_key):
         # /health must be accessible even without an API key
