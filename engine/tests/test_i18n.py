@@ -178,6 +178,40 @@ class TestGermanPack:
         assert isinstance(score, float)
         assert 0.0 <= score <= 1.0
 
+    def test_classifier_truncates_long_messages(self, de_pack, tmp_path, monkeypatch):
+        """Messages longer than the model's 512-token window used to raise
+        inside the pipeline; classify_text swallows that and returns all-zero
+        ML scores, so a long German message skipped ML moderation entirely."""
+        transformers = pytest.importorskip("transformers")
+
+        import i18n.packs.de as de_module
+
+        vocab = ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]", "du", "bist", "doof"]
+        (tmp_path / "vocab.txt").write_text("\n".join(vocab))
+        tok = transformers.DistilBertTokenizer(str(tmp_path / "vocab.txt"), model_max_length=32)
+        tiny = transformers.DistilBertForSequenceClassification(
+            transformers.DistilBertConfig(
+                vocab_size=len(vocab), max_position_embeddings=32, n_layers=1,
+                n_heads=2, dim=8, hidden_dim=16, num_labels=2,
+            )
+        )
+        import transformers.pipelines as hf_pipelines
+
+        real_pipeline = hf_pipelines.pipeline
+
+        def _tiny_pipeline(task, model=None, **kwargs):  # noqa: ARG001
+            return real_pipeline(task, model=tiny, tokenizer=tok, **kwargs)
+
+        monkeypatch.setattr(de_module, "_de_classifier", None)
+        # Patch both the lazy top-level alias and its implementation module
+        monkeypatch.setattr(transformers, "pipeline", _tiny_pipeline)
+        monkeypatch.setattr(hf_pipelines, "pipeline", _tiny_pipeline)
+        clf = de_pack.get_classifier()
+        assert clf is not None
+        out = clf("du bist doof " * 50)  # 150 tokens > 32-token window
+        label_scores = out[0] if isinstance(out[0], list) else out
+        assert {d["label"] for d in label_scores} == {"LABEL_0", "LABEL_1"}
+
 
 # ---------------------------------------------------------------------------
 # Language detector tests
@@ -226,3 +260,16 @@ class TestDetectLanguage:
             mock_settings.enabled_languages = []
             result = detect_language("some text")
         assert result == "en"
+
+
+class TestDetectionDeterminism:
+    def test_same_text_always_detected_as_same_language(self):
+        """langdetect is randomised unless seeded: 'du bist' flipped between
+        'de' and 'en' across calls, routing one message to different packs
+        (and thresholds/patterns) from one request to the next."""
+        pytest.importorskip("langdetect")
+        from i18n.detector import detect_language
+
+        for text in ("du bist", "Ich bin", "na und"):
+            results = {detect_language(text) for _ in range(40)}
+            assert len(results) == 1, (text, results)

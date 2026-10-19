@@ -163,3 +163,28 @@ class TestDecideOptInCategories:
         assert result.verdict == "delete"
         assert "cyberbullying" in result.reasons
         assert "advertising" in result.reasons
+
+
+class TestCoreFlagThresholdFromSkill:
+    """Core categories must honour ``flag_threshold`` from their skill file,
+    like opt-in categories do (skill files are the documented source of truth)."""
+
+    def test_lowered_core_flag_threshold_flags(self, monkeypatch):
+        from moderation.registry import ModerationRegistry
+
+        skill = ModerationRegistry.get("cyberbullying")
+        monkeypatch.setattr(skill, "flag_threshold", 0.2)
+        result = decide(ModerationScores(cyberbullying=0.3))
+        assert result.verdict == "flag"
+        assert result.reasons == ["elevated_cyberbullying"]
+
+    def test_raised_core_flag_threshold_allows(self, monkeypatch):
+        from moderation.registry import ModerationRegistry
+
+        skill = ModerationRegistry.get("violence")
+        monkeypatch.setattr(skill, "flag_threshold", 0.45)
+        assert decide(ModerationScores(violence=0.42)).verdict == "allow"
+
+    def test_shipped_core_flag_threshold_is_point_four(self):
+        assert decide(ModerationScores(nsfw=0.39)).verdict == "allow"
+        assert decide(ModerationScores(nsfw=0.4)).verdict == "flag"

@@ -8,6 +8,8 @@ Responsibilities
   window has expired (Article 5(1)(e) — storage limitation).
 - ``process_pending_deletions(session)`` — execute pending Article 17 erasure
   requests by removing all data for the requester.
+- ``gdpr_housekeeping_loop(interval)`` — runs both of the above periodically
+  *while the engine is up* (not only on restart).
 
 API endpoints (mounted at ``/gdpr``)
 -------------------------------------
@@ -17,6 +19,7 @@ GET  /gdpr/delete_request/{id}        — erasure request status
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
@@ -25,7 +28,7 @@ from typing import Any
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -67,14 +70,25 @@ def hash_id(platform: str, raw_id: str | int) -> str:
 async def run_retention_cleanup(session: AsyncSession) -> int:
     """Delete ModerationEvents whose retention window has expired.
 
+    A row is expired when its stored ``expires_at`` has passed *or* it is
+    older than the currently configured ``DATA_RETENTION_DAYS`` — so
+    shortening the retention period also applies to rows logged under the
+    old policy, and rows without ``expires_at`` are not kept forever.
+
     Returns the number of deleted rows.
     """
     now = datetime.now(tz=timezone.utc)
+    cutoff = now - timedelta(days=settings.data_retention_days)
     result = await session.execute(
         delete(ModerationEvent)
         .where(
-            ModerationEvent.expires_at.isnot(None),
-            ModerationEvent.expires_at <= now,
+            or_(
+                and_(
+                    ModerationEvent.expires_at.isnot(None),
+                    ModerationEvent.expires_at <= now,
+                ),
+                ModerationEvent.timestamp <= cutoff,
+            )
         )
         .returning(ModerationEvent.id)
     )
@@ -129,6 +143,46 @@ async def process_pending_deletions(session: AsyncSession) -> int:
         logger.info("gdpr_deletions_processed", count=processed)
 
     return processed
+
+
+# ---------------------------------------------------------------------------
+# Periodic housekeeping
+# ---------------------------------------------------------------------------
+
+
+async def run_gdpr_housekeeping() -> tuple[int, int]:
+    """Run retention cleanup and pending erasures in a fresh session.
+
+    Returns ``(retention_deleted, erasure_requests_processed)``.
+    """
+    from database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as session:
+        cleaned = await run_retention_cleanup(session)
+        processed = await process_pending_deletions(session)
+    return cleaned, processed
+
+
+async def gdpr_housekeeping_loop(interval_seconds: float) -> None:
+    """Repeat :func:`run_gdpr_housekeeping` every *interval_seconds* forever.
+
+    Without this, retention and erasure only happen when the engine
+    restarts, so a long-running deployment would keep data past
+    ``DATA_RETENTION_DAYS`` and never action erasure requests.  A failing
+    iteration is logged and retried on the next tick.
+    """
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            cleaned, processed = await run_gdpr_housekeeping()
+            if cleaned or processed:
+                logger.info(
+                    "gdpr_housekeeping",
+                    retention_deleted=cleaned,
+                    erasure_requests_processed=processed,
+                )
+        except Exception:
+            logger.exception("gdpr_housekeeping_failed")
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +291,18 @@ async def data_export(
         )
     ).scalars().all()
 
+    consent_records = (
+        await session.execute(
+            select(ConsentRecord).where(ConsentRecord.user_id_hash == user_hash)
+        )
+    ).scalars().all()
+
+    protected_images = (
+        await session.execute(
+            select(ProtectedImageHash).where(ProtectedImageHash.submitter_hash == user_hash)
+        )
+    ).scalars().all()
+
     return {
         "user_id_hash": user_hash,
         "moderation_events": [
@@ -268,6 +334,27 @@ async def data_export(
                 "completed_date": d.completed_date.isoformat() if d.completed_date else None,
             }
             for d in deletion_requests
+        ],
+        "consent_records": [
+            {
+                "id": c.id,
+                "group_id_hash": c.group_id_hash,
+                "platform": c.platform,
+                "consent_given": c.consent_given,
+                "consent_date": c.consent_date.isoformat() if c.consent_date else None,
+                "consent_scope": c.consent_scope,
+            }
+            for c in consent_records
+        ],
+        "protected_images": [
+            {
+                "id": p.id,
+                "hash_type": p.hash_type,
+                "platform": p.platform,
+                "note": p.note,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in protected_images
         ],
     }
 

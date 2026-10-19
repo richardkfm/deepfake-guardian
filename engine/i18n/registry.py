@@ -43,8 +43,9 @@ class LanguageRegistry:
 
         # Recursively collect all LanguagePack subclasses
         def _collect(cls_: type) -> list[type]:
-            result = []
-            for sub in cls_.__subclasses__():
+            result: list[type] = []
+            subclasses: list[type] = cls_.__subclasses__()
+            for sub in subclasses:
                 result.append(sub)
                 result.extend(_collect(sub))
             return result

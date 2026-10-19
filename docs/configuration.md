@@ -10,7 +10,7 @@ Set all thresholds at once with `MODERATION_PROFILE`:
 |---------|----------|-----------|------|----------|---------------|----------|
 | `minors_strict` | 0.5 | 0.3 | 0.4 | 0.6 | 0.4 | Schools, youth groups |
 | `default` | 0.5 | 0.5 | 0.8 | 0.7 | 0.65 | General communities |
-| `permissive` | 0.85 | 0.7 | 0.75 | 0.9 | 0.8 | Adult groups |
+| `permissive` | 0.85 | 0.7 | 0.9 | 0.9 | 0.8 | Adult groups |
 
 > **How thresholds work:** each threshold is the minimum confidence score that
 > triggers an automatic deletion. A **lower value means stricter** — the engine
@@ -87,6 +87,9 @@ Opt-in scores are returned under `scores.extra` in the API response.
 | `DATABASE_URL` | `sqlite+aiosqlite:///./deepfake_guardian.db` | Database URL |
 | `GDPR_SALT` | _(change me)_ | Secret salt for hashing user IDs |
 | `DATA_RETENTION_DAYS` | `30` | Days before auto-deletion of moderation events |
+| `GDPR_CLEANUP_INTERVAL_MINUTES` | `60` | How often retention cleanup and pending Article 17 erasures run while the engine is up (also at startup) |
+| `MEDIA_URL_ALLOW_PRIVATE` | `false` | Allow `image_url`/`video_url` to resolve to private/loopback/link-local addresses (SSRF guard on by default) |
+| `MAX_MEDIA_BYTES` | `52428800` | Max bytes downloaded from an `image_url`/`video_url`; larger → HTTP 413 |
 | `KNOWN_IMAGE_HASH_MATCHING` | `false` | Opt-in StopNCII-style protected-image hash matching — a match force-deletes regardless of ML scores. See `POST /protected_images` in `engine/known_content.py` |
 | `KNOWN_IMAGE_HASH_THRESHOLD` | `10` | Max perceptual-hash Hamming distance (of 64 bits) still considered a match |
 

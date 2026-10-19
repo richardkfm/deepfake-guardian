@@ -118,7 +118,7 @@ opt-in categories, reading each category's threshold from its skill.
 |---------|----------|-----------------|------|----------|---------------|
 | `minors_strict` | 0.5 | 0.3 | 0.4 | 0.6 | 0.4 |
 | `default` *(active)* | 0.5 | 0.5 | 0.8 | 0.7 | 0.65 |
-| `permissive` | 0.85 | 0.7 | 0.75 | 0.9 | 0.8 |
+| `permissive` | 0.85 | 0.7 | 0.9 | 0.9 | 0.8 |
 
 Select a profile via `MODERATION_PROFILE=default` (env var). Individual
 `THRESHOLD_*` env vars override a single value within the chosen profile. The
@@ -294,19 +294,50 @@ GDPR-local equivalent, not a client for their API.
 
 | File | Purpose |
 |------|---------|
-| `main.py` | Registers handlers for text/photo/video in group chats; acts on verdicts |
-| `engine_client.py` | Async HTTP client that calls the engine API |
-| `config.py` | Settings loaded from env (`TELEGRAM_BOT_TOKEN`, `ENGINE_URL`) |
+| `main.py` | Registers the moderation handler (group chats) and GDPR commands; acts on verdicts |
+| `engine_client.py` | Async HTTP client for the engine (moderation, warnings, GDPR) with retry/backoff |
+| `config.py` | Settings loaded from env (see *Environment Variables*) |
+| `i18n/*.json` | Bot UI messages (`en`, `de`); `loader.get_message()` falls back to English |
 
 Bot behaviour:
-- Ignores private chats and commands (only group messages)
-- `"delete"` verdict: deletes message if bot is admin, otherwise @-mentions admins
-- `"flag"` verdict: always @-mentions admins
+- Moderates **group** messages only — text, captions, photos, videos, GIFs,
+  video notes, stickers, image/video documents, and **edited** messages. Text
+  and media results are merged (most severe verdict wins). Unknown `/commands`
+  are moderated too; only the bot's own commands are exempt
+- `"delete"` verdict: deletes the message if the bot is owner or an admin with
+  the *Delete messages* right; otherwise asks the admins to remove it
+- `"flag"` verdict: asks the admins to review
+- Every violation is recorded via `/warnings/record`; repeat offenders escalate
+  (notice → admin notification → supervisor escalation). Exactly **one** group
+  notice per moderated message; admin @-mentions are rate-limited per chat
+  (`ADMIN_MENTION_COOLDOWN_SECONDS`, supervisor escalations always mention)
+- Media over `MAX_MEDIA_MB` is moderated via its thumbnail
+- **Fail-open:** engine unreachable → message left alone, `engine_unavailable_fail_open` logged.
+  Only connection errors and 5xx are retried (not 4xx, not read timeouts)
+- Logs carry metadata only — never message text, media, raw user IDs or the bot token
+- GDPR commands: `/privacy`, `/my_data` (Art. 15, private chat only), `/delete_my_data` (Art. 17)
+- Setup gotcha: the bot must be an admin or have BotFather privacy mode
+  disabled, otherwise Telegram never delivers ordinary group messages to it
 
 ### `whatsapp-bot/`
 
-TypeScript/Node.js bot using the Baileys library. Mirrors telegram-bot behaviour.
-Lives in `src/`. See its own `README.md` for setup details.
+TypeScript/Node.js bot using the Baileys library (ES module, `NodeNext`).
+Mirrors telegram-bot behaviour: same verdict handling, warnings/escalation,
+one notice per message, mention cooldown, fail-open policy, i18n (`en`/`de`)
+and GDPR commands (`/privacy`, `/my_data`, `/delete_my_data` as whole-message
+`/` or `!` commands). Also unwraps view-once / disappearing messages and
+moderates edits.
+
+| File | Purpose |
+|------|---------|
+| `src/index.ts` | Socket/connection wiring, verdict actions, commands |
+| `src/content.ts` | Extracts text/media from Baileys messages (unwrapping, edits) |
+| `src/moderation.ts` | Pure logic: result merging, notice composition, mention cooldown |
+| `src/engine-client.ts` | Axios engine client with retry/backoff and log-safe `describeError()` |
+| `src/i18n.ts` | Bot UI messages (`en`, `de`) |
+| `test/*.test.ts` | `node:test` suite — run with `npm test` |
+
+See its own `README.md` for setup details.
 
 ---
 
@@ -415,6 +446,10 @@ curl -X POST http://localhost:8000/moderate_text \
 | `DEEPFAKE_LAYER_COMBINE` | `max` | How multiple active layers' scores combine: `max` / `mean` / `weighted_mean` |
 | `KNOWN_IMAGE_HASH_MATCHING` | `false` | Enable StopNCII-style protected-image hash matching (see `engine/known_content.py`); a match forces `delete` |
 | `KNOWN_IMAGE_HASH_THRESHOLD` | `10` | Max Hamming distance (of 64 bits) still considered a match |
+| `MEDIA_URL_ALLOW_PRIVATE` | `false` | Allow `image_url`/`video_url` to resolve to private/loopback/link-local addresses (SSRF guard is on by default) |
+| `DATA_RETENTION_DAYS` | `30` | Days before moderation events are deleted |
+| `GDPR_CLEANUP_INTERVAL_MINUTES` | `60` | How often retention cleanup + pending Article 17 erasures run while the engine is up (also at startup) |
+| `MAX_MEDIA_BYTES` | `52428800` | Max bytes downloaded from an `image_url`/`video_url` (larger → 413) |
 
 ### Telegram bot (`telegram-bot/.env`)
 
@@ -422,12 +457,25 @@ curl -X POST http://localhost:8000/moderate_text \
 |----------|---------|-------------|
 | `TELEGRAM_BOT_TOKEN` | — | **Required.** Token from @BotFather |
 | `ENGINE_URL` | `http://engine:8000` | Engine base URL |
+| `ENGINE_API_KEY` | *(empty)* | Must match the engine's `API_KEY` |
+| `ENGINE_TIMEOUT_SECONDS` | `60` | Per-request engine timeout |
+| `BOT_LANGUAGE` | `en` | Notice language when the engine reports none (`en` / `de`) |
+| `MAX_MEDIA_MB` | `20` | Larger media is moderated via its thumbnail; `0` = no limit |
+| `ADMIN_MENTION_COOLDOWN_SECONDS` | `60` | Min. seconds between admin @-mentions per chat; `0` = always mention |
+| `LOG_LEVEL` | `info` | Logging verbosity |
 
 ### WhatsApp bot (`whatsapp-bot/.env`)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ENGINE_URL` | `http://engine:8000` | Engine base URL |
+| `ENGINE_API_KEY` | *(empty)* | Must match the engine's `API_KEY` |
+| `ENGINE_TIMEOUT_SECONDS` | `60` | Per-request engine timeout |
+| `BOT_LANGUAGE` | `en` | Notice language when the engine reports none, and for commands (`en` / `de`) |
+| `MAX_MEDIA_MB` | `20` | Larger media is moderated via its embedded thumbnail; `0` = no limit |
+| `ADMIN_MENTION_COOLDOWN_SECONDS` | `60` | Min. seconds between admin @-mentions per group; `0` = always mention |
+| `SESSION_DATA_PATH` | `./auth_info` | Baileys session storage |
+| `LOG_LEVEL` | `info` | Logging verbosity |
 
 ---
 
@@ -492,7 +540,12 @@ translation-only commits are all `PATCH` bumps — not `MINOR`.
 
 ## Security Notes
 
-- The engine currently has **no authentication**. Phase 1 adds an `API_KEY` middleware.
-- Do not expose the engine port (8000) publicly without auth.
+- Authentication is the `API_KEY` middleware (`X-API-Key` header, constant-time
+  compare; only `GET /health` is public). It is **disabled when `API_KEY` is
+  empty**, which is the default — set it for any non-local deployment.
+- Do not expose the engine port (8000) publicly without auth. `docker-compose.yml`
+  publishes it on `127.0.0.1` only; the bots use the internal network.
+- `image_url` / `video_url` fetches refuse private/loopback/link-local targets
+  (SSRF guard, `MEDIA_URL_ALLOW_PRIVATE` to opt out) and are capped at `MAX_MEDIA_BYTES`.
 - The WhatsApp bot uses an unofficial API (Baileys) — account bans are possible with aggressive usage.
 - Content sent to the engine is processed in-memory and not logged (only metadata: verdict, reasons, text preview capped at 80 chars).

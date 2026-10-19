@@ -8,8 +8,8 @@ same defences apply to ``/moderate_image``, ``/moderate_video`` and
   decompression bomb, an unsupported colour mode) raises
   :class:`MediaDecodeError` — a ``ValueError`` the routes turn into a ``400`` —
   instead of an unhandled exception and a ``500`` (which the bots retry).
-* ``image_url`` / ``video_url`` downloads are streamed and capped at
-  ``MAX_MEDIA_DOWNLOAD_BYTES`` so one URL can't exhaust the engine's memory.
+* Nothing here fetches URLs: ``image_url`` / ``video_url`` go through the
+  SSRF-checked, size-capped async ``routes.fetch_media_url``.
 * Images are canonicalised before analysis: EXIF orientation is applied
   (a phone photo stored sideways would otherwise defeat face detection and
   make the perceptual hash of a re-encoded copy differ from the original),
@@ -69,38 +69,6 @@ def decode_base64(data: str) -> bytes:
     if not raw:
         raise MediaDecodeError("Empty media payload")
     return raw
-
-
-def fetch_url_bytes(url: str, *, timeout: float) -> bytes:
-    """Download *url*, refusing bodies larger than ``MAX_MEDIA_DOWNLOAD_BYTES``.
-
-    The body is streamed so an oversized (or endless) response is aborted
-    once the cap is hit rather than buffered in full first.
-
-    Raises:
-        MediaDecodeError: The download failed or exceeded the size cap.
-    """
-    import httpx
-
-    from config import settings
-
-    limit = int(getattr(settings, "max_media_download_bytes", 0) or 0)
-    try:
-        with httpx.stream("GET", url, timeout=timeout, follow_redirects=True) as resp:
-            resp.raise_for_status()
-            declared = resp.headers.get("content-length")
-            if limit and declared and declared.isdigit() and int(declared) > limit:
-                raise MediaDecodeError(f"Media at URL exceeds {limit} bytes")
-            buf = bytearray()
-            for chunk in resp.iter_bytes():
-                buf.extend(chunk)
-                if limit and len(buf) > limit:
-                    raise MediaDecodeError(f"Media at URL exceeds {limit} bytes")
-    except httpx.HTTPError as exc:
-        raise MediaDecodeError(f"Could not download media: {type(exc).__name__}") from exc
-    if not buf:
-        raise MediaDecodeError("Downloaded media is empty")
-    return bytes(buf)
 
 
 # ---------------------------------------------------------------------------
@@ -251,9 +219,20 @@ def decode_image_bytes(data: bytes) -> Image.Image:
 
 
 def read_image_source(image_base64: str | None, image_url: str | None) -> bytes | None:
-    """Return the raw bytes of an image request, or ``None`` if neither is set."""
+    """Return the raw bytes of a base64 image request, or ``None`` if none given.
+
+    URLs are deliberately *not* fetched here: a synchronous fetch can't do
+    the per-redirect SSRF validation and size cap of the async
+    :func:`routes.fetch_media_url`, which every endpoint must use instead.
+
+    Raises:
+        MediaDecodeError: Only *image_url* was given.
+    """
     if image_base64:
         return decode_base64(image_base64)
     if image_url:
-        return fetch_url_bytes(image_url, timeout=30)
+        raise MediaDecodeError(
+            "image_url must be fetched with routes.fetch_media_url (SSRF-checked), "
+            "then decoded with media.load_image_frames"
+        )
     return None

@@ -1,0 +1,13 @@
+# Keep secrets and local state out of the image (Dockerfile does `COPY . .`).
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+*.sqlite3
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/

@@ -21,7 +21,10 @@ Available profiles:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -49,8 +52,30 @@ _FIELD_TO_SKILL = {
 _FALLBACK: dict[str, ThresholdProfile] = {
     "minors_strict": ThresholdProfile(0.5, 0.3, 0.4, 0.6, 0.4),
     "default": ThresholdProfile(0.5, 0.5, 0.8, 0.7, 0.65),
-    "permissive": ThresholdProfile(0.85, 0.7, 0.75, 0.9, 0.8),
+    "permissive": ThresholdProfile(0.85, 0.7, 0.9, 0.9, 0.8),
 }
+
+
+#: Profile names operators may select via ``MODERATION_PROFILE``.
+KNOWN_PROFILES: tuple[str, ...] = tuple(_FALLBACK)
+
+
+def normalise_profile_name(raw: str) -> str:
+    """Canonicalise a ``MODERATION_PROFILE`` value.
+
+    Case and surrounding whitespace are ignored.  An unknown name logs a
+    warning and resolves to ``"default"`` — previously it silently behaved
+    like ``default`` while still reporting the bogus name.
+    """
+    name = raw.strip().lower()
+    if name in KNOWN_PROFILES:
+        return name
+    logger.warning(
+        "Unknown MODERATION_PROFILE %r — using 'default'. Known profiles: %s",
+        raw,
+        ", ".join(KNOWN_PROFILES),
+    )
+    return "default"
 
 
 def get_profile(name: str) -> ThresholdProfile:

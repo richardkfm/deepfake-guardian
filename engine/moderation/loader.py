@@ -90,7 +90,17 @@ def _parse_patterns(content: str, category: str) -> list[HarmPattern]:
         if not m:
             logger.warning("Skipping malformed pattern line: %s", line)
             continue
-        weight = float(m.group(1))
+        try:
+            weight = float(m.group(1))
+        except ValueError:
+            # e.g. "0.8." — skip this line rather than aborting the whole skill
+            logger.warning("Skipping pattern line with invalid weight: %s", line)
+            continue
+        if not 0.0 <= weight <= 1.0:
+            # Scores are validated to [0, 1] downstream; an out-of-range weight
+            # would turn every matching message into a 500.
+            logger.warning("Clamping pattern weight %s to [0, 1]: %s", weight, line)
+            weight = min(max(weight, 0.0), 1.0)
         raw = m.group(2)
         try:
             compiled = re.compile(raw)
@@ -113,9 +123,32 @@ def _parse_labels(content: str) -> dict[str, str]:
     return labels
 
 
+_TRUE_STRINGS = {"true", "yes", "on", "1"}
+_FALSE_STRINGS = {"false", "no", "off", "0"}
+
+
+def _parse_bool(value: object, field_name: str) -> bool:
+    """Parse a frontmatter boolean, accepting quoted strings.
+
+    ``bool("false")`` is ``True``, so a quoted ``core: "false"`` would
+    otherwise turn an opt-in category into an always-on one.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in _TRUE_STRINGS:
+        return True
+    if text in _FALSE_STRINGS:
+        return False
+    raise ValueError(f"Invalid boolean for {field_name!r}: {value!r}")
+
+
 def load_skill(path: Path) -> ModerationSkill:
     """Parse a single skill markdown *path* into a :class:`ModerationSkill`."""
-    text = path.read_text(encoding="utf-8")
+    # utf-8-sig: tolerate the BOM some editors (e.g. Windows Notepad) prepend
+    text = path.read_text(encoding="utf-8-sig")
     fm_match = _FRONTMATTER_RE.match(text)
     if not fm_match:
         raise ValueError(f"Skill file missing YAML frontmatter: {path}")
@@ -127,7 +160,7 @@ def load_skill(path: Path) -> ModerationSkill:
     skill = ModerationSkill(
         category_id=category_id,
         display_name=str(meta.get("display_name", category_id)),
-        core=bool(meta.get("core", True)),
+        core=_parse_bool(meta.get("core", True), "core"),
         order=int(meta.get("order", 1000)),
         modalities=list(meta.get("modalities", ["text"])),
         thresholds={k: float(v) for k, v in (meta.get("thresholds") or {}).items()},

@@ -18,27 +18,29 @@ logger = logging.getLogger(__name__)
 
 
 def decode_video(video_base64: str | None, video_url: str | None) -> bytes:
-    """Decode video bytes from base64 data or download from URL.
+    """Decode video bytes from base64 data.
 
     Args:
         video_base64: Base64-encoded video data (a ``data:`` URI prefix is
             tolerated).
-        video_url: URL to download the video from (capped at
-            ``MAX_MEDIA_DOWNLOAD_BYTES``).
+        video_url: Not fetched here — URLs must go through the SSRF-checked,
+            size-capped async ``routes.fetch_media_url``.
 
     Returns:
         Raw video bytes.
 
     Raises:
-        ValueError: If neither source is provided, or the payload is not
-            valid base64 / can't be downloaded (``media.MediaDecodeError``).
+        ValueError: If no base64 payload is provided, or it is not valid
+            base64 (``media.MediaDecodeError``).
     """
-    from media import decode_base64, fetch_url_bytes
+    from media import decode_base64
 
     if video_base64:
         return decode_base64(video_base64)
     if video_url:
-        return fetch_url_bytes(video_url, timeout=60)
+        raise ValueError(
+            "video_url must be fetched with routes.fetch_media_url (SSRF-checked)"
+        )
     raise ValueError("Provide video_base64 or video_url")
 
 

@@ -104,12 +104,17 @@ def decode_image(image_base64: str | None, image_url: str | None) -> Image.Image
     :mod:`media`. For animated images this is the first frame only — use
     :func:`decode_image_frames` to analyse the whole animation.
 
+    *image_url* is not fetched here (a synchronous fetch can't apply the
+    SSRF checks): fetch it with the async ``routes.fetch_media_url`` and
+    decode the bytes with :func:`media.load_image_frames`.
+
     Returns:
         The decoded image, or ``None`` when neither source is given.
 
     Raises:
-        media.MediaDecodeError: The input is not a decodable image (a
-            ``ValueError`` subclass; the routes map it to HTTP 400).
+        media.MediaDecodeError: The input is not a decodable image, or only
+            *image_url* was given (a ``ValueError`` subclass; routes map it
+            to HTTP 400).
     """
     frames = decode_image_frames(image_base64, image_url, max_frames=1)
     return frames[0] if frames else None

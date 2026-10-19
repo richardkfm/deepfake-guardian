@@ -14,7 +14,6 @@ from media import (
     MediaDecodeError,
     decode_base64,
     decode_image_bytes,
-    fetch_url_bytes,
     load_image_frames,
     to_rgb,
 )
@@ -137,57 +136,6 @@ class TestAnimatedImages:
         assert frames[0].getpixel((0, 0)) == (255, 0, 0)
 
 
-class _FakeStream:
-    def __init__(self, chunks: list[bytes], headers: dict[str, str] | None = None):
-        self._chunks = chunks
-        self.headers = headers or {}
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def raise_for_status(self):
-        return None
-
-    def iter_bytes(self):
-        yield from self._chunks
-
-
-class TestFetchUrlBytes:
-    def test_download_within_limit(self, monkeypatch):
-        import config as config_module
-
-        monkeypatch.setattr(config_module.settings, "max_media_download_bytes", 100)
-        with patch("httpx.stream", return_value=_FakeStream([b"abc", b"def"])):
-            assert fetch_url_bytes("https://example.test/x", timeout=1) == b"abcdef"
-
-    def test_download_over_limit_aborted(self, monkeypatch):
-        import config as config_module
-
-        monkeypatch.setattr(config_module.settings, "max_media_download_bytes", 5)
-        with patch("httpx.stream", return_value=_FakeStream([b"abc", b"def", b"ghi"])):
-            with pytest.raises(MediaDecodeError):
-                fetch_url_bytes("https://example.test/x", timeout=1)
-
-    def test_declared_length_over_limit_rejected_up_front(self, monkeypatch):
-        import config as config_module
-
-        monkeypatch.setattr(config_module.settings, "max_media_download_bytes", 5)
-        stream = _FakeStream([b"a"], headers={"content-length": "999999"})
-        with patch("httpx.stream", return_value=stream):
-            with pytest.raises(MediaDecodeError):
-                fetch_url_bytes("https://example.test/x", timeout=1)
-
-    def test_http_error_becomes_decode_error(self):
-        import httpx
-
-        with patch("httpx.stream", side_effect=httpx.ConnectError("boom")):
-            with pytest.raises(MediaDecodeError):
-                fetch_url_bytes("https://example.test/x", timeout=1)
-
-
 class TestRoutesRejectBadImages:
     def test_corrupt_image_returns_400_not_500(self, client):
         payload = base64.b64encode(b"not an image at all").decode()
@@ -221,10 +169,33 @@ class TestRoutesRejectBadImages:
         assert body["scores"]["nsfw"] == pytest.approx(0.95)
         assert body["verdict"] == "delete"
 
-    def test_url_download_failure_returns_400(self, client):
-        with patch("media.fetch_url_bytes", side_effect=MediaDecodeError("nope")):
+    def test_url_with_undecodable_body_returns_400(self, client):
+        async def _fake_fetch(url, timeout):
+            return b"<html>not an image</html>"
+
+        with patch("routes.fetch_media_url", side_effect=_fake_fetch):
             resp = client.post("/moderate_image", json={"image_url": "https://example.test/a.png"})
         assert resp.status_code == 400
+
+    def test_url_image_decoded_from_fetched_bytes(self, client, small_image_b64):
+        raw = base64.b64decode(small_image_b64)
+
+        async def _fake_fetch(url, timeout):
+            return raw
+
+        with patch("routes.fetch_media_url", side_effect=_fake_fetch):
+            resp = client.post("/moderate_image", json={"image_url": "https://example.test/a.png"})
+        assert resp.status_code == 200
+
+    def test_decode_image_never_fetches_urls(self):
+        """URLs must go through the SSRF-checked routes.fetch_media_url."""
+        from classifiers import decode_image
+
+        with patch("httpx.get") as mock_get, patch("httpx.stream") as mock_stream:
+            with pytest.raises(MediaDecodeError):
+                decode_image(None, "http://169.254.169.254/latest/meta-data")
+        mock_get.assert_not_called()
+        mock_stream.assert_not_called()
 
 
 class TestVideoDecodeErrors:
@@ -232,11 +203,11 @@ class TestVideoDecodeErrors:
         resp = client.post("/moderate_video", json={"video_base64": "abc"})
         assert resp.status_code == 400
 
-    def test_video_url_capped(self, monkeypatch):
-        import config as config_module
+    def test_decode_video_never_fetches_urls(self):
         from video_processing import decode_video
 
-        monkeypatch.setattr(config_module.settings, "max_media_download_bytes", 2)
-        with patch("httpx.stream", return_value=_FakeStream([b"abc"])):
+        with patch("httpx.get") as mock_get, patch("httpx.stream") as mock_stream:
             with pytest.raises(ValueError):
-                decode_video(None, "https://example.test/v.mp4")
+                decode_video(None, "http://127.0.0.1:11434/v.mp4")
+        mock_get.assert_not_called()
+        mock_stream.assert_not_called()

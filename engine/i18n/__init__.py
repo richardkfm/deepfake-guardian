@@ -9,3 +9,13 @@ Usage:
 """
 
 from __future__ import annotations
+
+# langdetect is randomised by default, so the same short message could be
+# routed to different language packs (different patterns/models) on
+# different requests. Seed it once for deterministic detection.
+try:
+    from langdetect import DetectorFactory  # type: ignore[import-untyped]
+
+    DetectorFactory.seed = 0
+except ImportError:  # pragma: no cover - langdetect is a hard dependency
+    pass

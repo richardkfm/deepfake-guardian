@@ -1,6 +1,9 @@
 """Entry-point for the moderation engine API."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import hmac
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -15,8 +18,8 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from config import settings
-from database import AsyncSessionLocal, init_db
-from gdpr import gdpr_router, process_pending_deletions, run_retention_cleanup
+from database import init_db
+from gdpr import gdpr_housekeeping_loop, gdpr_router, run_gdpr_housekeeping
 from known_content import protected_images_router
 from routes import router
 from warn import warnings_router
@@ -56,18 +59,24 @@ limiter = Limiter(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Initialise the database and run GDPR housekeeping on startup."""
+    """Initialise the database and run GDPR housekeeping on startup and periodically."""
     await init_db()
-    async with AsyncSessionLocal() as session:
-        cleaned = await run_retention_cleanup(session)
-        processed = await process_pending_deletions(session)
-        if cleaned or processed:
-            log.info(
-                "startup_gdpr_cleanup",
-                retention_deleted=cleaned,
-                erasure_requests_processed=processed,
-            )
-    yield
+    cleaned, processed = await run_gdpr_housekeeping()
+    if cleaned or processed:
+        log.info(
+            "startup_gdpr_cleanup",
+            retention_deleted=cleaned,
+            erasure_requests_processed=processed,
+        )
+    housekeeping = asyncio.create_task(
+        gdpr_housekeeping_loop(settings.gdpr_cleanup_interval_minutes * 60)
+    )
+    try:
+        yield
+    finally:
+        housekeeping.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await housekeeping
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +111,12 @@ async def require_api_key(request: Request, call_next):  # type: ignore[no-untyp
         # /health is always public
         if request.url.path != "/health":
             provided = request.headers.get("X-API-Key", "")
-            if provided != settings.api_key:
+            # Constant-time comparison so response timing doesn't leak how
+            # much of the key matched; compare bytes so non-ASCII header
+            # values are rejected instead of raising TypeError.
+            if not hmac.compare_digest(
+                provided.encode("utf-8"), settings.api_key.encode("utf-8")
+            ):
                 log.warning("api_key_rejected", path=request.url.path)
                 return JSONResponse(
                     status_code=status.HTTP_401_UNAUTHORIZED,

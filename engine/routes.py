@@ -1,6 +1,11 @@
 """FastAPI route handlers for the moderation engine."""
 from __future__ import annotations
 
+import asyncio
+import ipaddress
+import socket
+
+import httpx
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from PIL import Image
@@ -10,7 +15,6 @@ from starlette.concurrency import run_in_threadpool
 from classifiers import (
     classify_image,
     classify_text,
-    decode_image_frames,
     detect_deepfake_suspect,
     score_deepfake_sexual_violence,
 )
@@ -27,6 +31,112 @@ from verdict import decide
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Helper: SSRF-safe media URL fetching
+# ---------------------------------------------------------------------------
+
+_MAX_REDIRECTS = 5
+# Overridable in tests (httpx.MockTransport); None = real network transport.
+_media_transport: httpx.AsyncBaseTransport | None = None
+
+
+class MediaFetchError(Exception):
+    """A client-supplied media URL could not (or must not) be fetched."""
+
+    def __init__(self, detail: str, status_code: int = 400) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.status_code = status_code
+
+
+async def _resolve_host(host: str, port: int) -> list[str]:
+    """Return every IP address *host* resolves to (IP literals map to themselves)."""
+    infos = await asyncio.get_running_loop().getaddrinfo(
+        host, port, type=socket.SOCK_STREAM
+    )
+    return [str(info[4][0]) for info in infos]
+
+
+def _is_public_address(raw: str) -> bool:
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address = ipaddress.ip_address(raw)
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return addr.is_global and not addr.is_multicast
+
+
+async def _validate_media_url(url: httpx.URL) -> None:
+    """Reject non-HTTP(S) URLs and URLs whose host resolves to a non-public IP.
+
+    Prevents ``image_url`` / ``video_url`` from being used to probe or read
+    internal services (cloud metadata endpoints, a local Ollama, the Docker
+    network, …).  Every redirect hop is re-validated by the caller.  Note:
+    httpx resolves the name again when connecting, so a DNS-rebinding
+    attacker with a very short TTL is not fully excluded.
+    """
+    from config import settings
+
+    if url.scheme not in ("http", "https"):
+        raise MediaFetchError(f"Media URL scheme '{url.scheme}' is not allowed")
+    host = url.host
+    if not host:
+        raise MediaFetchError("Media URL has no host and is not allowed")
+    if settings.media_url_allow_private:
+        return
+    port = url.port or (443 if url.scheme == "https" else 80)
+    try:
+        addresses = await _resolve_host(host, port)
+    except OSError as exc:
+        raise MediaFetchError(f"Could not resolve media URL host: {exc}") from exc
+    if not addresses or not all(_is_public_address(a) for a in addresses):
+        raise MediaFetchError(
+            "Media URL points to a private or reserved address, which is not allowed"
+        )
+
+
+async def fetch_media_url(url: str, timeout: float) -> bytes:
+    """Download *url* with SSRF checks on every hop and a size cap.
+
+    Raises :class:`MediaFetchError` for disallowed/oversized/failed fetches.
+    """
+    from config import settings
+
+    max_bytes = settings.max_media_bytes
+    try:
+        current = httpx.URL(url)
+    except httpx.InvalidURL as exc:
+        raise MediaFetchError(f"Invalid media URL: {exc}") from exc
+
+    async with httpx.AsyncClient(
+        timeout=timeout, follow_redirects=False, transport=_media_transport
+    ) as client:
+        for _ in range(_MAX_REDIRECTS + 1):
+            await _validate_media_url(current)
+            async with client.stream("GET", current) as resp:
+                if resp.is_redirect:
+                    location = resp.headers.get("location")
+                    if not location:
+                        raise MediaFetchError("Media URL redirect without a Location header")
+                    current = current.join(location)
+                    continue
+                if resp.status_code >= 400:
+                    raise MediaFetchError(
+                        f"Fetching media URL failed with HTTP {resp.status_code}"
+                    )
+                too_large = MediaFetchError(
+                    f"Media exceeds the {max_bytes}-byte download limit", status_code=413
+                )
+                declared = resp.headers.get("content-length", "")
+                if declared.isdigit() and int(declared) > max_bytes:
+                    raise too_large
+                buf = bytearray()
+                async for chunk in resp.aiter_bytes():
+                    buf.extend(chunk)
+                    if len(buf) > max_bytes:
+                        raise too_large
+                return bytes(buf)
+    raise MediaFetchError("Media URL redirected too many times")
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +199,29 @@ def _analyse_image_frames(frames: list[Image.Image]) -> dict[str, float]:
 
 
 # ---------------------------------------------------------------------------
+# Helper: language hint normalisation
+# ---------------------------------------------------------------------------
+
+
+def _normalise_language_hint(hint: str | None) -> str | None:
+    """Map a client language hint ("EN", "en-US", "de_DE") to an enabled pack code.
+
+    Language packs and skill patterns are keyed by lowercase ISO 639-1 codes,
+    so an unnormalised hint silently skipped all language-specific patterns.
+    Returns ``None`` (→ auto-detect) for hints with no enabled pack.
+    """
+    from config import settings
+    from i18n.registry import LanguageRegistry
+
+    if not hint:
+        return None
+    code = hint.strip().lower().replace("_", "-").split("-", 1)[0]
+    if code in settings.enabled_languages and LanguageRegistry.get(code) is not None:
+        return code
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Helper: build score dict for audit logging
 # ---------------------------------------------------------------------------
 
@@ -118,7 +251,7 @@ async def moderate_text(
     from i18n.detector import detect_language
     from moderation.registry import ModerationRegistry
 
-    lang_code = req.language or detect_language(req.text)
+    lang_code = _normalise_language_hint(req.language) or detect_language(req.text)
     text_scores = classify_text(req.text, lang_code)
 
     # Opt-in categories (advertising, political misinformation, …) — empty
@@ -174,22 +307,27 @@ async def moderate_image(
     video, so harmful content can't hide behind an innocuous first frame.
     """
     from config import settings
-    from media import MediaDecodeError
+    from media import MediaDecodeError, decode_base64, load_image_frames
 
     if not req.image_base64 and not req.image_url:
         raise HTTPException(status_code=400, detail="Provide image_base64 or image_url")
 
     try:
-        # Decoding (and any URL download) and the ML models are blocking:
-        # keep them off the event loop so one slow image or remote deepfake
-        # provider call doesn't stall every other request.
-        frames = await run_in_threadpool(
-            decode_image_frames, req.image_base64, req.image_url, settings.max_frames
-        )
+        if req.image_base64:
+            data = decode_base64(req.image_base64)
+        else:
+            assert req.image_url is not None
+            data = await fetch_media_url(req.image_url, timeout=30)
+        # Decoding and the ML models are blocking: keep them off the event
+        # loop so one slow image or remote deepfake provider call doesn't
+        # stall every other request.
+        frames = await run_in_threadpool(load_image_frames, data, settings.max_frames)
+    except MediaFetchError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except MediaDecodeError as exc:
+        # Malformed base64, non-image bytes, decompression bombs: client errors.
         raise HTTPException(status_code=400, detail=f"Could not decode image: {exc}") from exc
-    if not frames:
-        raise HTTPException(status_code=400, detail="Provide image_base64 or image_url")
+    del data  # only the decoded frames are needed from here on
 
     frame_scores = await run_in_threadpool(_analyse_image_frames, frames)
 
@@ -239,7 +377,13 @@ async def moderate_video(
     from video_processing import decode_video, extract_frames, moderate_video_frames
 
     try:
-        video_data = await run_in_threadpool(decode_video, req.video_base64, req.video_url)
+        if req.video_base64:
+            video_data = decode_video(req.video_base64, None)
+        else:
+            assert req.video_url is not None
+            video_data = await fetch_media_url(req.video_url, timeout=60)
+    except MediaFetchError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not decode video: {exc}") from exc
 
