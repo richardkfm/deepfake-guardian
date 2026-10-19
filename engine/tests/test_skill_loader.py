@@ -136,3 +136,56 @@ thresholds: { default: 0.5 }
         assert skill.score_text("this is severe and mild", "en") == pytest.approx(0.9)
         assert skill.score_text("nothing here", "en") == pytest.approx(0.0)
         assert skill.score_text("severe", "fr") == pytest.approx(0.0)  # unknown lang
+
+
+class TestPatternWeights:
+    def test_unparseable_weight_skips_line_not_whole_skill(self, tmp_path):
+        """'0.8.' matches the weight regex but isn't a float; it used to raise
+        ValueError and drop the entire skill (all its patterns + thresholds)."""
+        path = _write(
+            tmp_path,
+            "demo.md",
+            """---
+category_id: demo
+thresholds: { default: 0.5 }
+---
+
+## Patterns (en)
+- weight: 0.8.  `(?i)\\btypo\\b`
+- weight: 0.6  `(?i)\\bok\\b`
+""",
+        )
+        skill = load_skill(path)
+        assert [h.weight for h in skill.patterns["en"]] == [0.6]
+
+    def test_weight_above_one_is_clamped(self, tmp_path):
+        """Scores are validated to [0, 1]; a weight of 5 used to produce a 500
+        for every message the pattern matched."""
+        path = _write(
+            tmp_path,
+            "demo.md",
+            """---
+category_id: demo
+thresholds: { default: 0.5 }
+---
+
+## Patterns (en)
+- weight: 5  `(?i)\\bloud\\b`
+""",
+        )
+        skill = load_skill(path)
+        assert skill.score_text("loud", "en") == pytest.approx(1.0)
+
+    def test_core_pattern_weight_above_one_yields_valid_scores(self):
+        """A core (cyberbullying) pattern with weight > 1 must still produce a
+        response-schema-valid score instead of a pydantic ValidationError."""
+        from unittest.mock import MagicMock
+
+        from cyberbullying import score_cyberbullying
+        from models import ModerationScores
+        from moderation.loader import _parse_patterns
+
+        parsed = _parse_patterns("- weight: 1.5  `(?i)\\bzzbully\\b`", "cyberbullying")
+        pack = MagicMock(get_patterns=MagicMock(return_value=parsed))
+        score = score_cyberbullying("zzbully", pack)
+        assert ModerationScores(cyberbullying=score).cyberbullying == pytest.approx(1.0)

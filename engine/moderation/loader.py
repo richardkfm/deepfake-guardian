@@ -90,7 +90,17 @@ def _parse_patterns(content: str, category: str) -> list[HarmPattern]:
         if not m:
             logger.warning("Skipping malformed pattern line: %s", line)
             continue
-        weight = float(m.group(1))
+        try:
+            weight = float(m.group(1))
+        except ValueError:
+            # e.g. "0.8." — skip this line rather than aborting the whole skill
+            logger.warning("Skipping pattern line with invalid weight: %s", line)
+            continue
+        if not 0.0 <= weight <= 1.0:
+            # Scores are validated to [0, 1] downstream; an out-of-range weight
+            # would turn every matching message into a 500.
+            logger.warning("Clamping pattern weight %s to [0, 1]: %s", weight, line)
+            weight = min(max(weight, 0.0), 1.0)
         raw = m.group(2)
         try:
             compiled = re.compile(raw)
