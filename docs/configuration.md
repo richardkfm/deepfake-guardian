@@ -87,6 +87,9 @@ Opt-in scores are returned under `scores.extra` in the API response.
 | `DATABASE_URL` | `sqlite+aiosqlite:///./deepfake_guardian.db` | Database URL |
 | `GDPR_SALT` | _(change me)_ | Secret salt for hashing user IDs |
 | `DATA_RETENTION_DAYS` | `30` | Days before auto-deletion of moderation events |
+| `GDPR_CLEANUP_INTERVAL_MINUTES` | `60` | How often retention cleanup and pending Article 17 erasures run while the engine is up (also at startup) |
+| `MEDIA_URL_ALLOW_PRIVATE` | `false` | Allow `image_url`/`video_url` to resolve to private/loopback/link-local addresses (SSRF guard on by default) |
+| `MAX_MEDIA_BYTES` | `52428800` | Max bytes downloaded from an `image_url`/`video_url`; larger → HTTP 413 |
 | `KNOWN_IMAGE_HASH_MATCHING` | `false` | Opt-in StopNCII-style protected-image hash matching — a match force-deletes regardless of ML scores. See `POST /protected_images` in `engine/known_content.py` |
 | `KNOWN_IMAGE_HASH_THRESHOLD` | `10` | Max perceptual-hash Hamming distance (of 64 bits) still considered a match |
 

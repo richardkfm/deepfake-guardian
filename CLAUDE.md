@@ -540,7 +540,12 @@ translation-only commits are all `PATCH` bumps — not `MINOR`.
 
 ## Security Notes
 
-- The engine currently has **no authentication**. Phase 1 adds an `API_KEY` middleware.
-- Do not expose the engine port (8000) publicly without auth.
+- Authentication is the `API_KEY` middleware (`X-API-Key` header, constant-time
+  compare; only `GET /health` is public). It is **disabled when `API_KEY` is
+  empty**, which is the default — set it for any non-local deployment.
+- Do not expose the engine port (8000) publicly without auth. `docker-compose.yml`
+  publishes it on `127.0.0.1` only; the bots use the internal network.
+- `image_url` / `video_url` fetches refuse private/loopback/link-local targets
+  (SSRF guard, `MEDIA_URL_ALLOW_PRIVATE` to opt out) and are capped at `MAX_MEDIA_BYTES`.
 - The WhatsApp bot uses an unofficial API (Baileys) — account bans are possible with aggressive usage.
 - Content sent to the engine is processed in-memory and not logged (only metadata: verdict, reasons, text preview capped at 80 chars).
