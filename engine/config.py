@@ -15,6 +15,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _env_float(name: str, default: float) -> float:
+    """Read a float env var; unset or blank (``NAME=``) means *default*."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return float(raw)
+
+
 class Settings:
     """Central settings — all values come from env vars with sane defaults."""
 
@@ -54,20 +62,14 @@ class Settings:
 
         profile = get_profile(self.moderation_profile)
 
-        self.threshold_violence: float = float(
-            os.getenv("THRESHOLD_VIOLENCE", str(profile.violence))
+        self.threshold_violence: float = _env_float("THRESHOLD_VIOLENCE", profile.violence)
+        self.threshold_sexual_violence: float = _env_float(
+            "THRESHOLD_SEXUAL_VIOLENCE", profile.sexual_violence
         )
-        self.threshold_sexual_violence: float = float(
-            os.getenv("THRESHOLD_SEXUAL_VIOLENCE", str(profile.sexual_violence))
-        )
-        self.threshold_nsfw: float = float(
-            os.getenv("THRESHOLD_NSFW", str(profile.nsfw))
-        )
-        self.threshold_deepfake: float = float(
-            os.getenv("THRESHOLD_DEEPFAKE", str(profile.deepfake))
-        )
-        self.threshold_cyberbullying: float = float(
-            os.getenv("THRESHOLD_CYBERBULLYING", str(profile.cyberbullying))
+        self.threshold_nsfw: float = _env_float("THRESHOLD_NSFW", profile.nsfw)
+        self.threshold_deepfake: float = _env_float("THRESHOLD_DEEPFAKE", profile.deepfake)
+        self.threshold_cyberbullying: float = _env_float(
+            "THRESHOLD_CYBERBULLYING", profile.cyberbullying
         )
 
         # Deepfake detection provider: openai | ollama | local | sightengine | api | stub
