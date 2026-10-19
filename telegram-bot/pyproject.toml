@@ -3,6 +3,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-v"
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100
