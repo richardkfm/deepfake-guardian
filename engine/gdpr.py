@@ -280,6 +280,18 @@ async def data_export(
         )
     ).scalars().all()
 
+    consent_records = (
+        await session.execute(
+            select(ConsentRecord).where(ConsentRecord.user_id_hash == user_hash)
+        )
+    ).scalars().all()
+
+    protected_images = (
+        await session.execute(
+            select(ProtectedImageHash).where(ProtectedImageHash.submitter_hash == user_hash)
+        )
+    ).scalars().all()
+
     return {
         "user_id_hash": user_hash,
         "moderation_events": [
@@ -311,6 +323,27 @@ async def data_export(
                 "completed_date": d.completed_date.isoformat() if d.completed_date else None,
             }
             for d in deletion_requests
+        ],
+        "consent_records": [
+            {
+                "id": c.id,
+                "group_id_hash": c.group_id_hash,
+                "platform": c.platform,
+                "consent_given": c.consent_given,
+                "consent_date": c.consent_date.isoformat() if c.consent_date else None,
+                "consent_scope": c.consent_scope,
+            }
+            for c in consent_records
+        ],
+        "protected_images": [
+            {
+                "id": p.id,
+                "hash_type": p.hash_type,
+                "platform": p.platform,
+                "note": p.note,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in protected_images
         ],
     }
 

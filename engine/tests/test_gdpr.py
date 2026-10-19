@@ -51,7 +51,57 @@ class TestGDPRExport:
             "moderation_events",
             "warning_records",
             "deletion_requests",
+            "consent_records",
+            "protected_images",
         }
+
+    def test_export_includes_protected_image_hashes(self, client, small_image_b64):
+        """Article 15: everything stored against the user's hash must be exported,
+        including protected-image hashes (and their free-text note)."""
+        sub = client.post(
+            "/protected_images",
+            json={
+                "image_base64": small_image_b64,
+                "user_id": "export-ncii-user",
+                "platform": "telegram",
+                "note": "my photo",
+            },
+        )
+        assert sub.status_code == 200
+        protected_id = sub.json()["id"]
+
+        resp = client.post(
+            "/gdpr/export", json={"user_id": "export-ncii-user", "platform": "telegram"}
+        )
+        assert resp.status_code == 200
+        exported = resp.json()["protected_images"]
+        assert [p["id"] for p in exported] == [protected_id]
+        assert exported[0]["note"] == "my photo"
+        assert exported[0]["hash_type"] == "phash"
+
+    def test_export_includes_consent_records(self, client):
+        from database import AsyncSessionLocal
+        from db_models import ConsentRecord
+        from gdpr import hash_id
+
+        async def _insert() -> None:
+            async with AsyncSessionLocal() as db:
+                db.add(
+                    ConsentRecord(
+                        user_id_hash=hash_id("telegram", "export-consent-user"),
+                        platform="telegram",
+                        consent_given=True,
+                    )
+                )
+                await db.commit()
+
+        client.portal.call(_insert)
+        resp = client.post(
+            "/gdpr/export", json={"user_id": "export-consent-user", "platform": "telegram"}
+        )
+        records = resp.json()["consent_records"]
+        assert len(records) == 1
+        assert records[0]["consent_given"] is True
 
     def test_export_hash_is_deterministic(self, client):
         resp1 = client.post("/gdpr/export", json={"user_id": "u42", "platform": "telegram"})
