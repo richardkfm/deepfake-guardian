@@ -8,6 +8,8 @@ Responsibilities
   window has expired (Article 5(1)(e) — storage limitation).
 - ``process_pending_deletions(session)`` — execute pending Article 17 erasure
   requests by removing all data for the requester.
+- ``gdpr_housekeeping_loop(interval)`` — runs both of the above periodically
+  *while the engine is up* (not only on restart).
 
 API endpoints (mounted at ``/gdpr``)
 -------------------------------------
@@ -17,6 +19,7 @@ GET  /gdpr/delete_request/{id}        — erasure request status
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
@@ -129,6 +132,46 @@ async def process_pending_deletions(session: AsyncSession) -> int:
         logger.info("gdpr_deletions_processed", count=processed)
 
     return processed
+
+
+# ---------------------------------------------------------------------------
+# Periodic housekeeping
+# ---------------------------------------------------------------------------
+
+
+async def run_gdpr_housekeeping() -> tuple[int, int]:
+    """Run retention cleanup and pending erasures in a fresh session.
+
+    Returns ``(retention_deleted, erasure_requests_processed)``.
+    """
+    from database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as session:
+        cleaned = await run_retention_cleanup(session)
+        processed = await process_pending_deletions(session)
+    return cleaned, processed
+
+
+async def gdpr_housekeeping_loop(interval_seconds: float) -> None:
+    """Repeat :func:`run_gdpr_housekeeping` every *interval_seconds* forever.
+
+    Without this, retention and erasure only happen when the engine
+    restarts, so a long-running deployment would keep data past
+    ``DATA_RETENTION_DAYS`` and never action erasure requests.  A failing
+    iteration is logged and retried on the next tick.
+    """
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            cleaned, processed = await run_gdpr_housekeeping()
+            if cleaned or processed:
+                logger.info(
+                    "gdpr_housekeeping",
+                    retention_deleted=cleaned,
+                    erasure_requests_processed=processed,
+                )
+        except Exception:
+            logger.exception("gdpr_housekeeping_failed")
 
 
 # ---------------------------------------------------------------------------

@@ -117,3 +117,58 @@ class TestGDPRDeleteRequest:
         )
         assert resp.status_code == 200
         assert resp.json()["status"] == "pending"
+
+
+class TestPeriodicHousekeeping:
+    """Retention cleanup and Article 17 erasure must not only run at startup.
+
+    A long-running engine would otherwise keep moderation events past
+    DATA_RETENTION_DAYS and never execute erasure requests submitted after
+    boot, despite promising erasure "within 30 days".
+    """
+
+    def test_housekeeping_runs_repeatedly_while_app_is_up(self, monkeypatch):
+        import time
+        from unittest.mock import AsyncMock, patch
+
+        from fastapi.testclient import TestClient
+
+        import config
+        import gdpr
+
+        monkeypatch.setattr(config.settings, "gdpr_cleanup_interval_minutes", 0.0005)
+        cleanup = AsyncMock(return_value=0)
+        erasure = AsyncMock(return_value=0)
+        with (
+            patch.object(gdpr, "run_retention_cleanup", cleanup),
+            patch.object(gdpr, "process_pending_deletions", erasure),
+        ):
+            from main import app
+
+            with TestClient(app):
+                deadline = time.monotonic() + 3
+                while cleanup.await_count < 3 and time.monotonic() < deadline:
+                    time.sleep(0.02)
+
+        assert cleanup.await_count >= 3  # startup + periodic runs
+        assert erasure.await_count >= 3
+
+    def test_loop_survives_a_failing_iteration(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        import gdpr
+
+        calls = AsyncMock(side_effect=[RuntimeError("db down"), (0, 0), (0, 0), (0, 0)])
+
+        async def _run() -> None:
+            with patch.object(gdpr, "run_gdpr_housekeeping", calls):
+                task = asyncio.create_task(gdpr.gdpr_housekeeping_loop(0.001))
+                for _ in range(200):
+                    if calls.await_count >= 3:
+                        break
+                    await asyncio.sleep(0.005)
+                task.cancel()
+
+        asyncio.run(_run())
+        assert calls.await_count >= 3

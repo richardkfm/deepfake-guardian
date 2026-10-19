@@ -1,6 +1,8 @@
 """Entry-point for the moderation engine API."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hmac
 import logging
 from contextlib import asynccontextmanager
@@ -16,8 +18,8 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from config import settings
-from database import AsyncSessionLocal, init_db
-from gdpr import gdpr_router, process_pending_deletions, run_retention_cleanup
+from database import init_db
+from gdpr import gdpr_housekeeping_loop, gdpr_router, run_gdpr_housekeeping
 from known_content import protected_images_router
 from routes import router
 from warn import warnings_router
@@ -57,18 +59,24 @@ limiter = Limiter(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Initialise the database and run GDPR housekeeping on startup."""
+    """Initialise the database and run GDPR housekeeping on startup and periodically."""
     await init_db()
-    async with AsyncSessionLocal() as session:
-        cleaned = await run_retention_cleanup(session)
-        processed = await process_pending_deletions(session)
-        if cleaned or processed:
-            log.info(
-                "startup_gdpr_cleanup",
-                retention_deleted=cleaned,
-                erasure_requests_processed=processed,
-            )
-    yield
+    cleaned, processed = await run_gdpr_housekeeping()
+    if cleaned or processed:
+        log.info(
+            "startup_gdpr_cleanup",
+            retention_deleted=cleaned,
+            erasure_requests_processed=processed,
+        )
+    housekeeping = asyncio.create_task(
+        gdpr_housekeeping_loop(settings.gdpr_cleanup_interval_minutes * 60)
+    )
+    try:
+        yield
+    finally:
+        housekeeping.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await housekeeping
 
 
 # ---------------------------------------------------------------------------

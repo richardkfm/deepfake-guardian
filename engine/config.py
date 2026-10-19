@@ -150,6 +150,11 @@ class Settings:
         self.gdpr_salt: str = os.getenv("GDPR_SALT", "change-me-in-production")
         # How many days moderation events are kept before automatic deletion
         self.data_retention_days: int = int(os.getenv("DATA_RETENTION_DAYS", "30"))
+        # How often (minutes) retention cleanup and pending Article 17 erasure
+        # requests run while the engine is up (they also run at startup).
+        self.gdpr_cleanup_interval_minutes: float = float(
+            os.getenv("GDPR_CLEANUP_INTERVAL_MINUTES", "60")
+        )
 
 
 settings = Settings()
