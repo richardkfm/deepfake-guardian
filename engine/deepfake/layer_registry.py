@@ -34,6 +34,10 @@ class DeepfakeLayerRegistry:
     _layers: dict[str, DeepfakeLayer] = {}
     _discovered: bool = False
     _detector_cache: dict[str, DeepfakeDetector] = {}
+    #: layer_id -> whether its detector was usable the last time a request
+    #: asked for it (False also covers "could not be built"). Read by
+    #: ``GET /health`` so it never has to build providers or re-probe them.
+    _availability: dict[str, bool] = {}
 
     # ------------------------------------------------------------------
     # Discovery
@@ -115,20 +119,31 @@ class DeepfakeLayerRegistry:
                     prompt_override=layer.prompt,
                     provider_class=layer.provider_class,
                 )
-            except ValueError:
+            except Exception:
+                # ValueError for a bad manifest, but a custom provider's
+                # __init__ can raise anything — never let it fail the request.
                 logger.warning(
                     "Could not build deepfake layer '%s' (provider=%s)",
                     layer.layer_id,
                     layer.provider,
+                    exc_info=True,
                 )
+                cls._availability[layer.layer_id] = False
                 return None
             cls._detector_cache[layer.layer_id] = detector
             if layer.provider in _GDPR_WARN_PROVIDERS and detector.is_available():
                 cls._maybe_warn_gdpr(layer)
 
-        if not detector.is_available():
+        available = detector.is_available()
+        cls._availability[layer.layer_id] = available
+        if not available:
             return None
         return detector
+
+    @classmethod
+    def availability(cls) -> dict[str, bool]:
+        """Last observed availability per layer id (only layers used so far)."""
+        return dict(cls._availability)
 
     @classmethod
     def _maybe_warn_gdpr(cls, layer: DeepfakeLayer) -> None:
@@ -156,3 +171,4 @@ class DeepfakeLayerRegistry:
         cls._layers = {}
         cls._discovered = False
         cls._detector_cache = {}
+        cls._availability = {}

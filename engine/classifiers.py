@@ -352,12 +352,17 @@ def detect_deepfake_suspect(image: Image.Image) -> float:
     """Detect whether an image may be a deepfake.
 
     Pipeline:
-      1. Extract faces from the image using MediaPipe.
+      1. Extract faces from the image using MediaPipe (largest first).
       2. If no faces found, return 0.05 (no face = unlikely deepfake).
-      3. Run either the single legacy provider (``DEEPFAKE_PROVIDER``) or, if
+      3. Optionally keep only the ``DEEPFAKE_MAX_FACES`` largest faces.
+      4. Run either the single legacy provider (``DEEPFAKE_PROVIDER``) or, if
          ``DEEPFAKE_LAYERS`` is set, every active detection layer — combining
          their scores per ``DEEPFAKE_LAYER_COMBINE``.
-      4. Return the resulting score.
+      5. Return the resulting score, clamped to ``[0, 1]``.
+
+    A detector that *raises* is treated like one that failed to answer: the
+    baseline 0.05 is used (legacy path) or the layer is dropped from the
+    combination (multi-layer path), rather than failing the whole request.
 
     Args:
         image: A PIL RGB image.
@@ -370,26 +375,58 @@ def detect_deepfake_suspect(image: Image.Image) -> float:
     faces = extract_faces(image)
     if not faces:
         logger.debug("No faces detected — returning baseline deepfake score 0.05")
-        return 0.05
+        return _BASELINE_DEEPFAKE
 
     from config import settings
+
+    max_faces = getattr(settings, "deepfake_max_faces", 0)
+    if isinstance(max_faces, int) and max_faces > 0 and len(faces) > max_faces:
+        logger.info(
+            "Scoring the %d largest of %d faces (DEEPFAKE_MAX_FACES)", max_faces, len(faces)
+        )
+        faces = faces[:max_faces]
 
     if settings.deepfake_layers:
         return _detect_deepfake_multi_layer(faces, settings.deepfake_layers)
     return _detect_deepfake_legacy(faces)
 
 
+#: Mirrors :data:`deepfake.base.BASELINE_SCORE` (kept literal here so this
+#: module doesn't import the provider package at load time).
+_BASELINE_DEEPFAKE = 0.05
+
+
+def _max_face_score(scores: list[float]) -> float | None:
+    """Max of a detector's per-face scores, ignoring NaN; ``None`` if none usable."""
+    usable = [_unit(s) for s in scores if not _is_nan(s)]
+    return max(usable) if usable else None
+
+
+def _is_nan(value: Any) -> bool:
+    try:
+        return math.isnan(float(value))
+    except (TypeError, ValueError):
+        return True
+
+
 def _detect_deepfake_legacy(faces: list[Image.Image]) -> float:
-    """Single-provider path: today's ``DEEPFAKE_PROVIDER`` behaviour, unchanged."""
+    """Single-provider path: today's ``DEEPFAKE_PROVIDER`` behaviour."""
     from deepfake.factory import get_detector
 
     detector = get_detector()
-    scores = detector.detect(faces)
+    try:
+        scores = detector.detect(faces)
+    except Exception:
+        logger.exception(
+            "Deepfake provider '%s' raised — using baseline score",
+            getattr(detector, "name", "?"),
+        )
+        return _BASELINE_DEEPFAKE
 
-    if not scores:
-        return 0.05
+    result = _max_face_score(scores or [])
+    if result is None:
+        return _BASELINE_DEEPFAKE
 
-    result = max(scores)
     logger.info(
         "Deepfake detection: %d face(s), max score=%.3f (provider=%s)",
         len(faces),
@@ -418,24 +455,32 @@ def _detect_deepfake_multi_layer(faces: list[Image.Image], enabled_ids: list[str
             "DEEPFAKE_LAYERS=%s matched no known deepfake layers — returning baseline 0.05",
             enabled_ids,
         )
-        return 0.05
+        return _BASELINE_DEEPFAKE
 
     per_layer: dict[str, float] = {}
     for layer in layers:
         detector = DeepfakeLayerRegistry.get_detector_for(layer)
         if detector is None:
             continue
-        scores = detector.detect(faces)
-        if scores:
-            per_layer[layer.layer_id] = max(scores)
+        try:
+            scores = detector.detect(faces)
+        except Exception:
+            logger.exception(
+                "Deepfake layer '%s' raised — excluding it from this combination",
+                layer.layer_id,
+            )
+            continue
+        score = _max_face_score(scores or [])
+        if score is not None:
+            per_layer[layer.layer_id] = score
 
     if not per_layer:
         logger.warning(
-            "No active deepfake layer produced a usable detector — returning baseline 0.05"
+            "No active deepfake layer produced a usable score — returning baseline 0.05"
         )
-        return 0.05
+        return _BASELINE_DEEPFAKE
 
-    result = combine_scores(per_layer, layers, settings.deepfake_layer_combine)
+    result = _unit(combine_scores(per_layer, layers, settings.deepfake_layer_combine))
     logger.info(
         "Deepfake detection (multi-layer): %d face(s), layers=%s, combined=%.3f",
         len(faces),

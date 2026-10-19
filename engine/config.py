@@ -99,6 +99,11 @@ class Settings:
         ]
         # How multiple active layers' scores combine: max | mean | weighted_mean
         self.deepfake_layer_combine: str = os.getenv("DEEPFAKE_LAYER_COMBINE", "max")
+        # Only the N largest faces in an image/frame are sent to the deepfake
+        # detector(s). 0 (default) = score every detected face. Bounds the
+        # latency/cost of crowd photos with remote providers, which make one
+        # API call per face.
+        self.deepfake_max_faces: int = int(os.getenv("DEEPFAKE_MAX_FACES", "0"))
 
         # OpenAI provider (DEEPFAKE_PROVIDER=openai)
         self.openai_api_key: str = os.getenv("OPENAI_API_KEY", "")

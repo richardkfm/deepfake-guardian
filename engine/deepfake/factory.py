@@ -189,8 +189,19 @@ def active_detector_status() -> dict[str, object]:
 
             resolved = [ly.layer_id for ly in DeepfakeLayerRegistry.active_layers(list(layers))]
             status["resolved"] = resolved
-            # A configured id that matches no manifest contributes nothing.
-            status["degraded"] = not resolved
+            # Availability is only known for layers a request has already
+            # used; /health never builds or probes a provider itself.
+            seen = DeepfakeLayerRegistry.availability()
+            status["available"] = [lid for lid in resolved if seen.get(lid) is True]
+            status["unavailable"] = [lid for lid in resolved if seen.get(lid) is False]
+            # Degraded = nothing configured resolves to a manifest, or every
+            # resolved layer has been tried and none could run (e.g. the only
+            # layer is `openai` without OPENAI_API_KEY) — in both cases every
+            # face silently gets the 0.05 baseline.
+            all_known_unavailable = bool(resolved) and all(
+                seen.get(lid) is False for lid in resolved
+            )
+            status["degraded"] = not resolved or all_known_unavailable
         except Exception:  # pragma: no cover — /health must never 500
             logger.exception("Could not resolve deepfake layers for health report")
         return status
