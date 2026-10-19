@@ -171,6 +171,29 @@ async def _apply_known_hash_override(
 
 
 # ---------------------------------------------------------------------------
+# Helper: language hint normalisation
+# ---------------------------------------------------------------------------
+
+
+def _normalise_language_hint(hint: str | None) -> str | None:
+    """Map a client language hint ("EN", "en-US", "de_DE") to an enabled pack code.
+
+    Language packs and skill patterns are keyed by lowercase ISO 639-1 codes,
+    so an unnormalised hint silently skipped all language-specific patterns.
+    Returns ``None`` (→ auto-detect) for hints with no enabled pack.
+    """
+    from config import settings
+    from i18n.registry import LanguageRegistry
+
+    if not hint:
+        return None
+    code = hint.strip().lower().replace("_", "-").split("-", 1)[0]
+    if code in settings.enabled_languages and LanguageRegistry.get(code) is not None:
+        return code
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Helper: build score dict for audit logging
 # ---------------------------------------------------------------------------
 
@@ -200,7 +223,7 @@ async def moderate_text(
     from i18n.detector import detect_language
     from moderation.registry import ModerationRegistry
 
-    lang_code = req.language or detect_language(req.text)
+    lang_code = _normalise_language_hint(req.language) or detect_language(req.text)
     text_scores = classify_text(req.text, lang_code)
 
     # Opt-in categories (advertising, political misinformation, …) — empty

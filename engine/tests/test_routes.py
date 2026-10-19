@@ -51,6 +51,44 @@ class TestModerateText:
         resp = client.post("/moderate_text", json={})
         assert resp.status_code == 422
 
+    @pytest.mark.parametrize(
+        ("hint", "expected"),
+        [("EN", "en"), ("en-US", "en"), (" de_DE ", "de"), ("de", "de")],
+    )
+    def test_language_hint_is_normalised(self, client, hint, expected):
+        """'EN' / 'en-US' used to bypass the English pack (no patterns, no
+        cyberbullying rules) because pack lookup is by exact lowercase code."""
+        safe = {"violence": 0.0, "sexual_violence": 0.0, "nsfw": 0.0, "cyberbullying": 0.0}
+        with patch("routes.classify_text", return_value=safe) as clf:
+            resp = client.post("/moderate_text", json={"text": "hello", "language": hint})
+        assert resp.status_code == 200
+        assert resp.json()["language"] == expected
+        assert clf.call_args.args[1] == expected
+
+    def test_unsupported_language_hint_falls_back_to_detection(self, client):
+        safe = {"violence": 0.0, "sexual_violence": 0.0, "nsfw": 0.0, "cyberbullying": 0.0}
+        with (
+            patch("routes.classify_text", return_value=safe) as clf,
+            patch("i18n.detector.detect_language", return_value="de"),
+        ):
+            resp = client.post(
+                "/moderate_text", json={"text": "hallo zusammen", "language": "xx"}
+            )
+        assert resp.status_code == 200
+        assert resp.json()["language"] == "de"
+        assert clf.call_args.args[1] == "de"
+
+    def test_uppercase_hint_still_runs_opt_in_patterns(self, client, monkeypatch):
+        from config import settings
+
+        monkeypatch.setattr(settings, "enabled_categories", ["advertising"])
+        resp = client.post(
+            "/moderate_text",
+            json={"text": "Buy now and use code SAVE50!", "language": "EN"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["scores"]["extra"]["advertising"] > 0.0
+
     def test_response_schema(self, client):
         resp = client.post("/moderate_text", json={"text": "test"})
         body = resp.json()
