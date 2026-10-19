@@ -10,7 +10,7 @@ Set all thresholds at once with `MODERATION_PROFILE`:
 |---------|----------|-----------|------|----------|---------------|----------|
 | `minors_strict` | 0.5 | 0.3 | 0.4 | 0.6 | 0.4 | Schools, youth groups |
 | `default` | 0.5 | 0.5 | 0.8 | 0.7 | 0.65 | General communities |
-| `permissive` | 0.85 | 0.7 | 0.75 | 0.9 | 0.8 | Adult groups |
+| `permissive` | 0.85 | 0.7 | 0.9 | 0.9 | 0.8 | Adult groups |
 
 > **How thresholds work:** each threshold is the minimum confidence score that
 > triggers an automatic deletion. A **lower value means stricter** — the engine

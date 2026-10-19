@@ -100,3 +100,32 @@ class TestAggregationHelpers:
         msgs = ModerationRegistry.messages_for_language("en")
         assert "cyberbullying" in msgs
         assert "violence" in msgs
+
+
+class TestProfileOrdering:
+    """``permissive`` must never be stricter than ``default``, nor ``default``
+    stricter than ``minors_strict`` (lower threshold = more deletions)."""
+
+    def test_skill_thresholds_are_monotonic(self):
+        bad = {
+            s.category_id: s.thresholds
+            for s in ModerationRegistry.all_skills()
+            if not (
+                s.thresholds["minors_strict"]
+                <= s.thresholds["default"]
+                <= s.thresholds["permissive"]
+            )
+        }
+        assert bad == {}
+
+    def test_fallback_profiles_are_monotonic(self):
+        from dataclasses import fields
+
+        from profiles import _FALLBACK
+
+        for f in fields(_FALLBACK["default"]):
+            strict, default, permissive = (
+                getattr(_FALLBACK[name], f.name)
+                for name in ("minors_strict", "default", "permissive")
+            )
+            assert strict <= default <= permissive, f.name

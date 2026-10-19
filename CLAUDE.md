@@ -118,7 +118,7 @@ opt-in categories, reading each category's threshold from its skill.
 |---------|----------|-----------------|------|----------|---------------|
 | `minors_strict` | 0.5 | 0.3 | 0.4 | 0.6 | 0.4 |
 | `default` *(active)* | 0.5 | 0.5 | 0.8 | 0.7 | 0.65 |
-| `permissive` | 0.85 | 0.7 | 0.75 | 0.9 | 0.8 |
+| `permissive` | 0.85 | 0.7 | 0.9 | 0.9 | 0.8 |
 
 Select a profile via `MODERATION_PROFILE=default` (env var). Individual
 `THRESHOLD_*` env vars override a single value within the chosen profile. The

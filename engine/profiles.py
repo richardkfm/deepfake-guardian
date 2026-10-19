@@ -52,7 +52,7 @@ _FIELD_TO_SKILL = {
 _FALLBACK: dict[str, ThresholdProfile] = {
     "minors_strict": ThresholdProfile(0.5, 0.3, 0.4, 0.6, 0.4),
     "default": ThresholdProfile(0.5, 0.5, 0.8, 0.7, 0.65),
-    "permissive": ThresholdProfile(0.85, 0.7, 0.75, 0.9, 0.8),
+    "permissive": ThresholdProfile(0.85, 0.7, 0.9, 0.9, 0.8),
 }
 
 
