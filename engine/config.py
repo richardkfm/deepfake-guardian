@@ -39,7 +39,7 @@ class Settings:
 
         # i18n — comma-separated list of enabled language codes
         self.enabled_languages: list[str] = [
-            lang.strip()
+            lang.strip().lower()
             for lang in os.getenv("ENABLED_LANGUAGES", "en,de").split(",")
             if lang.strip()
         ]
@@ -47,8 +47,10 @@ class Settings:
         # Opt-in moderation categories — comma-separated list of skill ids
         # (e.g. "advertising,political_misinformation").  Core child-safety
         # categories are always on; these run only when listed here.
+        # Skill ids are lowercase, so normalise case to avoid silently ignoring
+        # e.g. "Advertising".
         self.enabled_categories: list[str] = [
-            cat.strip()
+            cat.strip().lower()
             for cat in os.getenv("ENABLED_CATEGORIES", "").split(",")
             if cat.strip()
         ]

@@ -53,3 +53,24 @@ class TestThresholdOverrides:
     def test_explicit_threshold_override_still_applies(self, monkeypatch):
         monkeypatch.setenv("THRESHOLD_NSFW", "0.55")
         assert _fresh_settings().threshold_nsfw == pytest.approx(0.55)
+
+
+class TestListParsing:
+    def test_enabled_categories_are_normalised(self, monkeypatch):
+        """Skill ids are lowercase; ``Advertising`` must not be silently ignored."""
+        monkeypatch.setenv("ENABLED_CATEGORIES", " Advertising , SCAMS,,hate_speech ")
+        assert _fresh_settings().enabled_categories == ["advertising", "scams", "hate_speech"]
+
+    def test_enabled_languages_are_normalised(self, monkeypatch):
+        monkeypatch.setenv("ENABLED_LANGUAGES", "EN, De")
+        assert _fresh_settings().enabled_languages == ["en", "de"]
+
+    def test_mixed_case_category_is_actually_scored(self, monkeypatch):
+        from moderation.registry import ModerationRegistry
+
+        monkeypatch.setenv("ENABLED_CATEGORIES", "Advertising")
+        s = _fresh_settings()
+        scores = ModerationRegistry.score_text_categories(
+            "Buy now and use code SAVE50!", "en", s.enabled_categories
+        )
+        assert scores.get("advertising", 0.0) > 0.0
