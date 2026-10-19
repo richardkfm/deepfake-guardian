@@ -1,6 +1,7 @@
 """Entry-point for the moderation engine API."""
 from __future__ import annotations
 
+import hmac
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -102,7 +103,12 @@ async def require_api_key(request: Request, call_next):  # type: ignore[no-untyp
         # /health is always public
         if request.url.path != "/health":
             provided = request.headers.get("X-API-Key", "")
-            if provided != settings.api_key:
+            # Constant-time comparison so response timing doesn't leak how
+            # much of the key matched; compare bytes so non-ASCII header
+            # values are rejected instead of raising TypeError.
+            if not hmac.compare_digest(
+                provided.encode("utf-8"), settings.api_key.encode("utf-8")
+            ):
                 log.warning("api_key_rejected", path=request.url.path)
                 return JSONResponse(
                     status_code=status.HTTP_401_UNAUTHORIZED,

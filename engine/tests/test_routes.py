@@ -173,3 +173,29 @@ class TestApiKeyAuth:
     def test_health_bypasses_auth(self, client_with_key):
         resp = client_with_key.get("/health")
         assert resp.status_code == 200
+
+    def test_api_key_compared_in_constant_time(self, client_with_key):
+        """A plain ``!=`` leaks the key prefix through response timing."""
+        import hmac
+
+        with patch("hmac.compare_digest", wraps=hmac.compare_digest) as spy:
+            resp = client_with_key.post(
+                "/moderate_text",
+                json={"text": "hello"},
+                headers={"X-API-Key": "test-secret-kez"},
+            )
+        assert resp.status_code == 401
+        spy.assert_called()
+
+    def test_non_ascii_api_key_rejected_not_crashing(self, client_with_key):
+        resp = client_with_key.post(
+            "/moderate_text",
+            json={"text": "hello"},
+            headers={"X-API-Key": b"test-secret-k\xe9y"},
+        )
+        assert resp.status_code == 401
+
+    @pytest.mark.parametrize("path", ["/health/", "/health/../moderate_text", "/Health"])
+    def test_only_exact_health_path_is_public(self, client_with_key, path):
+        resp = client_with_key.post(path, json={"text": "hello"})
+        assert resp.status_code != 200
