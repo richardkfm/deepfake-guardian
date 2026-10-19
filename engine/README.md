@@ -62,10 +62,14 @@ back to the stub — `GET /health` reports this as `deepfake.degraded: true`. Se
 
 Videos are decoded via OpenCV, sampled at configurable intervals, and each frame
 is run through the full image moderation pipeline (NSFW + violence + deepfake).
-Scores are aggregated via max across all frames.
+Scores are aggregated via max across all frames. When interval sampling would
+need more than `MAX_FRAMES` frames, the budget is spread evenly over the whole
+video (so a harmless intro can't hide later content); files without a usable
+frame count or that can't be seeked are decoded sequentially. Animated
+GIF/WebP/APNG sent to `/moderate_image` are analysed frame by frame the same way.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `FRAME_INTERVAL` | `2.0` | Seconds between sampled frames |
-| `MAX_FRAMES` | `10` | Maximum frames per video |
-| `MAX_VIDEO_DURATION` | `300` | Max video length in seconds |
+| `MAX_FRAMES` | `10` | Maximum frames per video / animated image |
+| `MAX_VIDEO_DURATION` | `300` | Only the first N seconds are analysed |

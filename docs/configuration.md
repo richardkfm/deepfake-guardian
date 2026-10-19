@@ -81,9 +81,10 @@ Opt-in scores are returned under `scores.extra` in the API response.
 | `SIGHTENGINE_API_SECRET` | _(empty)_ | SightEngine secret |
 | `DEEPFAKE_API_URL` | _(empty)_ | Custom endpoint (for `api` provider) |
 | `DEEPFAKE_API_KEY` | _(empty)_ | Bearer token for custom API |
-| `FRAME_INTERVAL` | `2.0` | Seconds between sampled video frames |
-| `MAX_FRAMES` | `10` | Max frames per video |
-| `MAX_VIDEO_DURATION` | `300` | Max video length in seconds |
+| `FRAME_INTERVAL` | `2.0` | Seconds between sampled video frames (spread evenly over the video when that would exceed `MAX_FRAMES`) |
+| `MAX_FRAMES` | `10` | Max frames per video / animated image |
+| `MAX_VIDEO_DURATION` | `300` | Only the first N seconds of a video are analysed |
+| `DEEPFAKE_MAX_FACES` | `0` | Only send the N largest faces per image/frame to the deepfake detector(s); `0` = all |
 | `DATABASE_URL` | `sqlite+aiosqlite:///./deepfake_guardian.db` | Database URL |
 | `GDPR_SALT` | _(change me)_ | Secret salt for hashing user IDs |
 | `DATA_RETENTION_DAYS` | `30` | Days before auto-deletion of moderation events |
@@ -91,7 +92,8 @@ Opt-in scores are returned under `scores.extra` in the API response.
 | `MEDIA_URL_ALLOW_PRIVATE` | `false` | Allow `image_url`/`video_url` to resolve to private/loopback/link-local addresses (SSRF guard on by default) |
 | `MAX_MEDIA_BYTES` | `52428800` | Max bytes downloaded from an `image_url`/`video_url`; larger → HTTP 413 |
 | `KNOWN_IMAGE_HASH_MATCHING` | `false` | Opt-in StopNCII-style protected-image hash matching — a match force-deletes regardless of ML scores. See `POST /protected_images` in `engine/known_content.py` |
-| `KNOWN_IMAGE_HASH_THRESHOLD` | `10` | Max perceptual-hash Hamming distance (of 64 bits) still considered a match |
+| `KNOWN_IMAGE_HASH_THRESHOLD` | `10` | Max perceptual-hash Hamming distance (of 64 bits) still considered a match; values above 32 are clamped |
+| `KNOWN_IMAGE_HASH_ROBUST_MATCHING` | `false` | Also match mirrored copies and centre re-crops of protected images (more comparisons, higher false-match risk) |
 
 ## Telegram bot
 
