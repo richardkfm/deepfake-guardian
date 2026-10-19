@@ -180,7 +180,13 @@ def _scores_from_zero_shot(clf: Any, text: str, label_map: dict[str, str]) -> di
 def _scores_from_multilabel(clf: Any, text: str, label_map: dict[str, str]) -> dict[str, float]:
     """Run a multi-label text-classification pipeline and map labels."""
     # top_k=None returns list of {label, score} dicts for every class
-    raw_list: list[dict[str, Any]] = clf(text)
+    raw_list: Any = clf(text)
+    # With top_k=None set at pipeline construction, a single-string call
+    # returns [[{label, score}, ...]] (one inner list per input). Indexing the
+    # outer list as dicts raised TypeError, which the caller swallowed — so
+    # the multi-label (German) ML classifier silently contributed 0.0.
+    if raw_list and isinstance(raw_list[0], list):
+        raw_list = raw_list[0]
     raw: dict[str, float] = {item["label"]: item["score"] for item in raw_list}
 
     scores: dict[str, float] = {
