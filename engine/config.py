@@ -114,6 +114,11 @@ class Settings:
         self.frame_interval: float = float(os.getenv("FRAME_INTERVAL", "2.0"))
         self.max_frames: int = int(os.getenv("MAX_FRAMES", "10"))
         self.max_video_duration: int = int(os.getenv("MAX_VIDEO_DURATION", "300"))
+        # Upper bound for media fetched via image_url / video_url (bytes). The
+        # download is streamed and aborted beyond this. 0 = unlimited.
+        self.max_media_download_bytes: int = int(
+            os.getenv("MAX_MEDIA_DOWNLOAD_BYTES", str(100 * 1024 * 1024))
+        )
 
         # Known non-consensual intimate imagery (NCII) hash matching — opt-in.
         # When enabled, incoming images/video frames are perceptually hashed

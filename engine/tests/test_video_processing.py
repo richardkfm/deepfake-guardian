@@ -141,3 +141,160 @@ class TestModerateVideoFrames:
 
         assert result["sexual_violence"] == pytest.approx(0.81)
         assert result["deepfake_suspect"] == pytest.approx(0.9)
+
+
+class TestPlanSampleIndices:
+    def test_short_video_keeps_interval_sampling(self):
+        """Unchanged behaviour: one frame every FRAME_INTERVAL from the start."""
+        from video_processing import plan_sample_indices
+
+        # 10 s at 25 fps, every 2 s -> 0, 50, 100, 150, 200
+        assert plan_sample_indices(250, 25.0, 2.0, 10, 300) == [0, 50, 100, 150, 200]
+
+    def test_long_video_spreads_budget_over_whole_duration(self):
+        """Previously only the first MAX_FRAMES * FRAME_INTERVAL seconds (20 s)
+        were looked at — a harmless intro hid everything after it."""
+        from video_processing import plan_sample_indices
+
+        fps = 25.0
+        total = int(120 * fps)  # 2 minutes
+        indices = plan_sample_indices(total, fps, 2.0, 10, 300)
+        assert len(indices) == 10
+        assert indices == sorted(indices)
+        assert indices[-1] / fps > 100  # the last sample is near the end
+        assert indices[0] / fps < 12  # and the first near the start
+
+    def test_duration_cap_respected(self):
+        from video_processing import plan_sample_indices
+
+        fps = 25.0
+        indices = plan_sample_indices(int(3600 * fps), fps, 2.0, 10, 300)
+        assert max(indices) < 300 * fps
+
+    def test_zero_or_unknown_frame_count(self):
+        from video_processing import plan_sample_indices
+
+        assert plan_sample_indices(0, 25.0, 2.0, 10, 300) == []
+
+    def test_max_frames_below_one_treated_as_one(self):
+        from video_processing import plan_sample_indices
+
+        assert len(plan_sample_indices(1000, 25.0, 2.0, 0, 300)) == 1
+
+
+def _sequential_cap(n_frames: int, fps: float = 25.0, frame_count: float = 0, raw: bool = False):
+    """A VideoCapture mock that only supports front-to-back decoding.
+
+    With *raw*, each retrieved "frame" is a 1x1x1 int64 array holding its
+    frame index (for asserting which frames the sampler kept).
+    """
+    import cv2
+
+    cap = MagicMock()
+    cap.isOpened.return_value = True
+    cap.get.side_effect = lambda prop: {
+        cv2.CAP_PROP_FPS: fps,
+        cv2.CAP_PROP_FRAME_COUNT: frame_count,
+    }.get(prop, 0)
+    state = {"pos": -1}
+
+    def _grab():
+        state["pos"] += 1
+        return state["pos"] < n_frames
+
+    def _retrieve():
+        if raw:
+            return True, np.full((1, 1, 1), state["pos"], dtype=np.int64)
+        return True, np.zeros((8, 8, 3), dtype=np.uint8)
+
+    cap.grab.side_effect = _grab
+    cap.retrieve.side_effect = _retrieve
+    cap.read.return_value = (False, None)  # seeking unsupported
+    return cap
+
+
+class TestExtractFramesFallbacks:
+    def _run(self, cap, max_frames=10, interval=2.0, duration=300):
+        import cv2
+
+        with (
+            patch.object(cv2, "VideoCapture", return_value=cap),
+            patch("config.settings") as mock_settings,
+        ):
+            mock_settings.frame_interval = interval
+            mock_settings.max_frames = max_frames
+            mock_settings.max_video_duration = duration
+            from video_processing import extract_frames
+
+            return extract_frames(b"fake video data")
+
+    def test_unknown_frame_count_decoded_sequentially(self):
+        """WebM / streamed MP4 often report 0 frames — previously that meant
+        zero frames extracted and an unanalysed "allow"."""
+        cap = _sequential_cap(n_frames=250, frame_count=0)  # 10 s, count unknown
+        frames = self._run(cap)
+        assert len(frames) == 5  # one every 2 s
+        assert all(isinstance(f, Image.Image) for f in frames)
+
+    def test_failed_seeks_fall_back_to_sequential(self):
+        cap = _sequential_cap(n_frames=250, frame_count=250)
+        frames = self._run(cap)
+        assert len(frames) == 5
+
+    def test_sequential_sampling_bounded(self):
+        cap = _sequential_cap(n_frames=25 * 120, frame_count=-1)  # 2 min, unknown length
+        frames = self._run(cap, max_frames=4)
+        assert 1 <= len(frames) <= 4
+
+    def test_sequential_respects_duration_cap(self):
+        cap = _sequential_cap(n_frames=25 * 600, frame_count=0)
+        self._run(cap, duration=10)
+        # 10 s at 25 fps: never decodes past frame 250 (+1 for the failed grab)
+        assert cap.grab.call_count <= 251
+
+    def test_implausible_fps_does_not_break_sampling(self):
+        import cv2
+
+        cap = MagicMock()
+        cap.isOpened.return_value = True
+        cap.get.side_effect = lambda prop: {
+            cv2.CAP_PROP_FPS: float("nan"),
+            cv2.CAP_PROP_FRAME_COUNT: 250,
+        }.get(prop, 0)
+        cap.read.return_value = (True, np.zeros((8, 8, 3), dtype=np.uint8))
+        frames = self._run(cap)
+        assert len(frames) == 5  # NaN fps -> assume 25
+
+    def test_capture_released_on_success(self):
+        cap = _sequential_cap(n_frames=50, frame_count=0)
+        self._run(cap)
+        assert cap.release.called
+
+    def test_large_frames_downscaled(self):
+        import cv2
+
+        from media import MAX_IMAGE_SIDE
+
+        cap = MagicMock()
+        cap.isOpened.return_value = True
+        cap.get.side_effect = lambda prop: {
+            cv2.CAP_PROP_FPS: 25.0,
+            cv2.CAP_PROP_FRAME_COUNT: 1,
+        }.get(prop, 0)
+        cap.read.return_value = (True, np.zeros((16, MAX_IMAGE_SIDE + 1000, 3), dtype=np.uint8))
+        frames = self._run(cap)
+        assert max(frames[0].size) == MAX_IMAGE_SIDE
+
+
+class TestSequentialSampler:
+    def test_decimation_keeps_even_spread(self):
+        from video_processing import _read_sequentially
+
+        cap = _sequential_cap(n_frames=1000, raw=True)
+        with patch("video_processing._to_pil", side_effect=lambda f: int(f[0, 0, 0])):
+            kept = _read_sequentially(cap, fps=1.0, frame_interval=1.0, max_frames=5, max_duration=0)
+        assert 3 <= len(kept) <= 5
+        assert kept[0] == 0
+        assert kept[-1] >= 500  # covers the second half, not just the first 5 frames
+        steps = {b - a for a, b in zip(kept, kept[1:])}
+        assert len(steps) == 1  # evenly spaced

@@ -4,14 +4,15 @@ Each public function accepts raw content and returns a dict of category scores.
 Text classification now routes through the i18n :class:`~i18n.registry.LanguageRegistry`
 so that language-specific models and patterns are applied automatically.
 
-The image and deepfake classifiers are unchanged from Phase 1.
+Image decoding is delegated to :mod:`media` (hardened against malformed input,
+EXIF-orientation aware, animation aware).
 """
 
 from __future__ import annotations
 
-import base64
-import io
 import logging
+import math
+import threading
 from typing import Any
 
 from PIL import Image
@@ -25,6 +26,10 @@ logger = logging.getLogger(__name__)
 _fallback_text_classifier: Any = None
 _image_classifier: Any = None
 _violence_classifier: Any = None
+# Guards the lazy image-model loads below: image/video analysis runs in a
+# worker thread pool, and two concurrent first requests must not each load a
+# multi-hundred-MB model.
+_image_model_lock = threading.Lock()
 
 
 def _get_fallback_text_classifier() -> Any:
@@ -49,17 +54,19 @@ def _get_image_classifier() -> Any:
     """Return an image classification pipeline for NSFW/violence (cached)."""
     global _image_classifier
     if _image_classifier is None:
-        try:
-            from transformers import pipeline
+        with _image_model_lock:
+            if _image_classifier is None:
+                try:
+                    from transformers import pipeline
 
-            _image_classifier = pipeline(
-                "image-classification",
-                model="Falconsai/nsfw_image_detection",
-                device=-1,
-            )
-            logger.info("Image classifier loaded: Falconsai/nsfw_image_detection")
-        except Exception:
-            logger.warning("Could not load image classifier – using stub scores")
+                    _image_classifier = pipeline(
+                        "image-classification",
+                        model="Falconsai/nsfw_image_detection",
+                        device=-1,
+                    )
+                    logger.info("Image classifier loaded: Falconsai/nsfw_image_detection")
+                except Exception:
+                    logger.warning("Could not load image classifier – using stub scores")
     return _image_classifier
 
 
@@ -67,17 +74,21 @@ def _get_violence_classifier() -> Any:
     """Return a CLIP zero-shot classifier for image violence detection (cached)."""
     global _violence_classifier
     if _violence_classifier is None:
-        try:
-            from transformers import pipeline
+        with _image_model_lock:
+            if _violence_classifier is None:
+                try:
+                    from transformers import pipeline
 
-            _violence_classifier = pipeline(
-                "zero-shot-image-classification",
-                model="openai/clip-vit-base-patch32",
-                device=-1,
-            )
-            logger.info("Violence classifier loaded: openai/clip-vit-base-patch32")
-        except Exception:
-            logger.warning("Could not load violence classifier – violence scores will be 0.0")
+                    _violence_classifier = pipeline(
+                        "zero-shot-image-classification",
+                        model="openai/clip-vit-base-patch32",
+                        device=-1,
+                    )
+                    logger.info("Violence classifier loaded: openai/clip-vit-base-patch32")
+                except Exception:
+                    logger.warning(
+                        "Could not load violence classifier – violence scores will be 0.0"
+                    )
     return _violence_classifier
 
 
@@ -87,17 +98,41 @@ def _get_violence_classifier() -> Any:
 
 
 def decode_image(image_base64: str | None, image_url: str | None) -> Image.Image | None:
-    """Decode a PIL Image from base64 data or fetch from URL."""
-    if image_base64:
-        data = base64.b64decode(image_base64)
-        return Image.open(io.BytesIO(data)).convert("RGB")
-    if image_url:
-        import httpx
+    """Decode a canonical RGB PIL Image from base64 data or a URL.
 
-        resp = httpx.get(image_url, timeout=30, follow_redirects=True)
-        resp.raise_for_status()
-        return Image.open(io.BytesIO(resp.content)).convert("RGB")
-    return None
+    Applies EXIF orientation and the other canonicalisation steps in
+    :mod:`media`. For animated images this is the first frame only — use
+    :func:`decode_image_frames` to analyse the whole animation.
+
+    Returns:
+        The decoded image, or ``None`` when neither source is given.
+
+    Raises:
+        media.MediaDecodeError: The input is not a decodable image (a
+            ``ValueError`` subclass; the routes map it to HTTP 400).
+    """
+    frames = decode_image_frames(image_base64, image_url, max_frames=1)
+    return frames[0] if frames else None
+
+
+def decode_image_frames(
+    image_base64: str | None, image_url: str | None, max_frames: int = 1
+) -> list[Image.Image]:
+    """Decode an image request into canonical RGB frames.
+
+    A still image yields one frame; an animated GIF/WebP/APNG yields up to
+    *max_frames* frames spread across the animation. Returns ``[]`` when
+    neither source is given.
+
+    Raises:
+        media.MediaDecodeError: The input is not a decodable image.
+    """
+    from media import load_image_frames, read_image_source
+
+    data = read_image_source(image_base64, image_url)
+    if data is None:
+        return []
+    return load_image_frames(data, max_frames=max_frames)
 
 
 # ---------------------------------------------------------------------------
@@ -240,13 +275,18 @@ def classify_image(image: Image.Image) -> dict[str, float]:
 
     Returns dict with keys: violence, sexual_violence, nsfw.
     """
+    if image.mode != "RGB":
+        from media import to_rgb
+
+        image = to_rgb(image)
+
     # NSFW detection
     nsfw_score = 0.0
     clf = _get_image_classifier()
     if clf is not None:
         results = clf(image)
         label_scores: dict[str, float] = {r["label"].lower(): r["score"] for r in results}
-        nsfw_score = float(label_scores.get("nsfw", 0.0))
+        nsfw_score = _unit(label_scores.get("nsfw", 0.0))
 
     # Violence detection via CLIP zero-shot
     violence_score = 0.0
@@ -255,19 +295,34 @@ def classify_image(image: Image.Image) -> dict[str, float]:
         try:
             v_results = v_clf(image, candidate_labels=_VIOLENCE_LABELS)
             v_scores: dict[str, float] = {r["label"]: r["score"] for r in v_results}
-            violence_score = float(max(
+            violence_score = _unit(max(
                 v_scores.get("violence", 0.0),
                 v_scores.get("gore", 0.0),
                 v_scores.get("fighting", 0.0),
             ))
         except Exception:
-            logger.warning("Violence classification failed")
+            logger.exception("Violence classification failed — violence score is 0.0")
 
     return {
         "violence": violence_score,
         "sexual_violence": nsfw_score * 0.5,  # Rough heuristic
         "nsfw": nsfw_score,
     }
+
+
+def _unit(value: Any, default: float = 0.0) -> float:
+    """Coerce a model output to a finite float in ``[0, 1]``.
+
+    A NaN or out-of-range score would fail ``ModerationScores`` validation
+    and turn the whole request into a 500.
+    """
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(f):
+        return default
+    return min(max(f, 0.0), 1.0)
 
 
 def score_deepfake_sexual_violence(nsfw_score: float, deepfake_score: float) -> float:

@@ -5,11 +5,12 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from classifiers import (
     classify_image,
     classify_text,
-    decode_image,
+    decode_image_frames,
     detect_deepfake_suspect,
     score_deepfake_sexual_violence,
 )
@@ -56,6 +57,35 @@ async def _apply_known_hash_override(
             reasons = list(dict.fromkeys([*result.reasons, "known_ncii_match"]))
             return result.model_copy(update={"verdict": "delete", "reasons": reasons})
     return result
+
+
+# ---------------------------------------------------------------------------
+# Helper: per-image visual analysis (runs in a worker thread)
+# ---------------------------------------------------------------------------
+
+
+def _analyse_still_image(image: Image.Image) -> dict[str, float]:
+    """Classify one image and score deepfake-sexual-violence (CPU / blocking IO)."""
+    img_scores = classify_image(image)
+    deepfake_score = detect_deepfake_suspect(image)
+    return {
+        "violence": img_scores["violence"],
+        "sexual_violence": max(
+            img_scores["sexual_violence"],
+            score_deepfake_sexual_violence(img_scores["nsfw"], deepfake_score),
+        ),
+        "nsfw": img_scores["nsfw"],
+        "deepfake_suspect": deepfake_score,
+    }
+
+
+def _analyse_image_frames(frames: list[Image.Image]) -> dict[str, float]:
+    """Analyse a still image, or every sampled frame of an animated one."""
+    if len(frames) == 1:
+        return _analyse_still_image(frames[0])
+    from video_processing import moderate_video_frames
+
+    return moderate_video_frames(frames)
 
 
 # ---------------------------------------------------------------------------
@@ -138,31 +168,45 @@ async def moderate_image(
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> ModerationResult:
-    """Classify an image and return a moderation verdict."""
-    image = decode_image(req.image_base64, req.image_url)
-    if image is None:
+    """Classify an image and return a moderation verdict.
+
+    Animated images (GIF / WebP / APNG) are analysed frame by frame, like a
+    video, so harmful content can't hide behind an innocuous first frame.
+    """
+    from config import settings
+    from media import MediaDecodeError
+
+    if not req.image_base64 and not req.image_url:
         raise HTTPException(status_code=400, detail="Provide image_base64 or image_url")
 
-    img_scores = classify_image(image)
-    deepfake_score = detect_deepfake_suspect(image)
-    sexual_violence_score = max(
-        img_scores["sexual_violence"],
-        score_deepfake_sexual_violence(img_scores["nsfw"], deepfake_score),
-    )
+    try:
+        # Decoding (and any URL download) and the ML models are blocking:
+        # keep them off the event loop so one slow image or remote deepfake
+        # provider call doesn't stall every other request.
+        frames = await run_in_threadpool(
+            decode_image_frames, req.image_base64, req.image_url, settings.max_frames
+        )
+    except MediaDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not decode image: {exc}") from exc
+    if not frames:
+        raise HTTPException(status_code=400, detail="Provide image_base64 or image_url")
+
+    frame_scores = await run_in_threadpool(_analyse_image_frames, frames)
 
     scores = ModerationScores(
-        violence=img_scores["violence"],
-        sexual_violence=sexual_violence_score,
-        nsfw=img_scores["nsfw"],
-        deepfake_suspect=deepfake_score,
+        violence=frame_scores["violence"],
+        sexual_violence=frame_scores["sexual_violence"],
+        nsfw=frame_scores["nsfw"],
+        deepfake_suspect=frame_scores["deepfake_suspect"],
         cyberbullying=0.0,
     )
     result = decide(scores)
-    result = await _apply_known_hash_override(session, [image], result)
+    result = await _apply_known_hash_override(session, frames, result)
     logger.info(
         "image_moderation",
         verdict=result.verdict,
         reasons=result.reasons,
+        frames_analysed=len(frames),
     )
 
     if req.user_id or req.group_id:
@@ -195,11 +239,12 @@ async def moderate_video(
     from video_processing import decode_video, extract_frames, moderate_video_frames
 
     try:
-        video_data = decode_video(req.video_base64, req.video_url)
+        video_data = await run_in_threadpool(decode_video, req.video_base64, req.video_url)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not decode video: {exc}") from exc
 
-    frames = extract_frames(video_data)
+    frames = await run_in_threadpool(extract_frames, video_data)
+    del video_data  # don't keep the raw upload alive for the rest of the request
 
     if not frames:
         logger.warning("video_moderation: no frames extracted — returning allow")
@@ -210,7 +255,7 @@ async def moderate_video(
             "deepfake_suspect": 0.0,
         }
     else:
-        frame_scores = moderate_video_frames(frames)
+        frame_scores = await run_in_threadpool(moderate_video_frames, frames)
 
     scores = ModerationScores(
         violence=frame_scores["violence"],
