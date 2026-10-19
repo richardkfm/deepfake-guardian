@@ -46,9 +46,11 @@ class Settings:
         ]
 
         # Moderation profile — sets default thresholds; individual env vars override
-        self.moderation_profile: str = os.getenv("MODERATION_PROFILE", "default")
+        from profiles import get_profile, normalise_profile_name
 
-        from profiles import get_profile
+        self.moderation_profile: str = normalise_profile_name(
+            os.getenv("MODERATION_PROFILE", "default")
+        )
 
         profile = get_profile(self.moderation_profile)
 
