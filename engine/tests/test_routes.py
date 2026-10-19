@@ -99,6 +99,20 @@ class TestModerateImage:
         assert "sexual_violence" in body["reasons"]
 
 
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "not base64 at all!!",  # invalid base64 alphabet / padding
+            "dGVzdA==",  # valid base64, but the bytes are not an image
+        ],
+    )
+    def test_undecodable_image_returns_400_not_500(self, client, payload):
+        """Bad client input must be a 400, not an unhandled 500."""
+        resp = client.post("/moderate_image", json={"image_base64": payload})
+        assert resp.status_code == 400
+        assert "decode" in resp.json()["detail"].lower()
+
+
 class TestModerateVideo:
     def test_video_with_no_frames_returns_allow(self, client):
         """When frame extraction yields no frames, returns allow."""

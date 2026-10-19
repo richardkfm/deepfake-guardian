@@ -139,7 +139,12 @@ async def moderate_image(
     session: AsyncSession = Depends(get_session),
 ) -> ModerationResult:
     """Classify an image and return a moderation verdict."""
-    image = decode_image(req.image_base64, req.image_url)
+    try:
+        image = decode_image(req.image_base64, req.image_url)
+    except Exception as exc:
+        # Malformed base64, non-image bytes or an unreachable URL are client
+        # errors — mirror /moderate_video instead of surfacing a 500.
+        raise HTTPException(status_code=400, detail=f"Could not decode image: {exc}") from exc
     if image is None:
         raise HTTPException(status_code=400, detail="Provide image_base64 or image_url")
 
