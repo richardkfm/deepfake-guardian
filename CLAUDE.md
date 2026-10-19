@@ -384,7 +384,7 @@ See its own `README.md` for setup details.
 | Self-harm / ED promotion detection | ✅ Opt-in skill (flag-leaning) — messages link crisis helplines |
 | Deepfake sexual violence ("revenge porn") detection | ✅ Statistical: `sexual_violence` escalates when NSFW + `deepfake_suspect` signals combine. ✅ Deterministic: opt-in StopNCII-style protected-hash matching (`KNOWN_IMAGE_HASH_MATCHING`) — see `engine/known_content.py` |
 | Admin dashboard | Not implemented — Phase 5 |
-| WhatsApp GDPR commands | Not implemented — Phase 6 |
+| WhatsApp GDPR commands | ✅ `/privacy`, `/my_data`, `/delete_my_data` (LID vs. phone-number JIDs are not yet mapped to one identity) |
 
 ---
 
