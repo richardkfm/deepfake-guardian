@@ -71,7 +71,7 @@ jobs:
         run: pytest
 
   # ---------------------------------------------------------------------------
-  # WhatsApp bot — build TypeScript
+  # WhatsApp bot — build TypeScript + tests
   # ---------------------------------------------------------------------------
   whatsapp-bot:
     name: WhatsApp Bot (TypeScript)
@@ -96,3 +96,6 @@ jobs:
 
       - name: Build TypeScript
         run: npm run build
+
+      - name: Run tests
+        run: npm test
