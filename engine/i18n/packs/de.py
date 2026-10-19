@@ -55,6 +55,11 @@ class GermanPack(LanguagePack):
                     model="ml6team/distilbert-base-german-cased-toxic-comments",
                     device=-1,  # CPU
                     top_k=None,  # return all label scores
+                    # Cut inputs to the model's 512-token window. Without this a
+                    # long message raises inside the model, classify_text()
+                    # swallows the error and returns all-zero ML scores, i.e.
+                    # long German messages skipped ML moderation entirely.
+                    truncation=True,
                 )
                 logger.info(
                     "German classifier loaded: "
