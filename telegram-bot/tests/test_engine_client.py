@@ -56,7 +56,7 @@ class TestModerateText:
             nonlocal call_count
             call_count += 1
             if call_count < 3:
-                raise httpx.TransportError("connection refused")
+                raise httpx.ConnectError("connection refused")
             return ok_resp
 
         with (
@@ -80,11 +80,11 @@ class TestModerateText:
             patch("asyncio.sleep", new_callable=AsyncMock),
         ):
             mock_client = MagicMock()
-            mock_client.post = AsyncMock(side_effect=httpx.TransportError("down"))
+            mock_client.post = AsyncMock(side_effect=httpx.ConnectError("down"))
             mock_get.return_value = mock_client
 
             import engine_client
-            with pytest.raises(httpx.TransportError):
+            with pytest.raises(httpx.ConnectError):
                 await engine_client.moderate_text("hello")
 
         # 1 initial + 3 retries = 4 total calls
@@ -113,6 +113,60 @@ class TestModerateText:
 
         assert result["verdict"] == "allow"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [400, 401, 403, 422])
+    async def test_does_not_retry_client_errors(self, status):
+        with (
+            patch("engine_client._get_client") as mock_get,
+            patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        ):
+            mock_client = MagicMock()
+            mock_client.post = AsyncMock(return_value=_make_response(status, {"detail": "x"}))
+            mock_get.return_value = mock_client
+
+            import engine_client
+            with pytest.raises(httpx.HTTPStatusError):
+                await engine_client.moderate_text("hello")
+
+        assert mock_client.post.call_count == 1
+        mock_sleep.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_does_not_retry_read_timeout(self):
+        """A read timeout means the engine is busy — re-sending only adds load."""
+        with (
+            patch("engine_client._get_client") as mock_get,
+            patch("asyncio.sleep", new_callable=AsyncMock),
+        ):
+            mock_client = MagicMock()
+            mock_client.post = AsyncMock(side_effect=httpx.ReadTimeout("slow"))
+            mock_get.return_value = mock_client
+
+            import engine_client
+            with pytest.raises(httpx.ReadTimeout):
+                await engine_client.moderate_video(b"\x00\x01")
+
+        assert mock_client.post.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_payload_carries_audit_context(self):
+        ok_resp = _make_response(200, _ALLOW_RESULT)
+        with patch("engine_client._get_client") as mock_get:
+            mock_client = MagicMock()
+            mock_client.post = AsyncMock(return_value=ok_resp)
+            mock_get.return_value = mock_client
+
+            import engine_client
+            await engine_client.moderate_image(b"img", user_id="1", group_id="-100")
+
+        path, = mock_client.post.call_args.args
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert path == "/moderate_image"
+        assert payload["image_base64"] == "aW1n"
+        assert payload["user_id"] == "1"
+        assert payload["group_id"] == "-100"
+        assert payload["platform"] == "telegram"
+
 
 class TestApiKeyHeader:
     def test_client_includes_api_key_when_configured(self, monkeypatch):
@@ -131,6 +185,19 @@ class TestApiKeyHeader:
         # Cleanup
         engine_client._client = None
         config_module.settings.engine_api_key = ""
+
+    def test_client_uses_configured_timeout(self):
+        import config as config_module
+        import engine_client
+        engine_client._client = None
+        original = config_module.settings.engine_timeout_seconds
+        config_module.settings.engine_timeout_seconds = 12.5
+        try:
+            client = engine_client._get_client()
+            assert client.timeout.read == 12.5
+        finally:
+            engine_client._client = None
+            config_module.settings.engine_timeout_seconds = original
 
     def test_client_omits_header_when_no_key(self, monkeypatch):
         import engine_client
