@@ -446,6 +446,8 @@ curl -X POST http://localhost:8000/moderate_text \
 | `DEEPFAKE_LAYER_COMBINE` | `max` | How multiple active layers' scores combine: `max` / `mean` / `weighted_mean` |
 | `KNOWN_IMAGE_HASH_MATCHING` | `false` | Enable StopNCII-style protected-image hash matching (see `engine/known_content.py`); a match forces `delete` |
 | `KNOWN_IMAGE_HASH_THRESHOLD` | `10` | Max Hamming distance (of 64 bits) still considered a match |
+| `MEDIA_URL_ALLOW_PRIVATE` | `false` | Allow `image_url`/`video_url` to resolve to private/loopback/link-local addresses (SSRF guard is on by default) |
+| `MAX_MEDIA_BYTES` | `52428800` | Max bytes downloaded from an `image_url`/`video_url` (larger → 413) |
 
 ### Telegram bot (`telegram-bot/.env`)
 

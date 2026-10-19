@@ -115,6 +115,16 @@ class Settings:
         self.max_frames: int = int(os.getenv("MAX_FRAMES", "10"))
         self.max_video_duration: int = int(os.getenv("MAX_VIDEO_DURATION", "300"))
 
+        # image_url / video_url fetching (routes.fetch_media_url).  URLs that
+        # resolve to private, loopback, link-local or otherwise reserved
+        # addresses are refused (SSRF protection) unless explicitly allowed,
+        # e.g. for a trusted internal media store.
+        self.media_url_allow_private: bool = os.getenv(
+            "MEDIA_URL_ALLOW_PRIVATE", "false"
+        ).strip().lower() in ("1", "true", "yes")
+        # Maximum bytes downloaded from a media URL (default 50 MiB)
+        self.max_media_bytes: int = int(os.getenv("MAX_MEDIA_BYTES", str(50 * 1024 * 1024)))
+
         # Known non-consensual intimate imagery (NCII) hash matching — opt-in.
         # When enabled, incoming images/video frames are perceptually hashed
         # and compared against victim/admin-submitted protected hashes (see
