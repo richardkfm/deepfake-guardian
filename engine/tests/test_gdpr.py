@@ -222,3 +222,64 @@ class TestPeriodicHousekeeping:
 
         asyncio.run(_run())
         assert calls.await_count >= 3
+
+
+class TestRetentionCleanup:
+    """Storage limitation must follow the *current* DATA_RETENTION_DAYS."""
+
+    def _insert_and_cleanup(self, client, events):
+        from sqlalchemy import select
+
+        from database import AsyncSessionLocal
+        from db_models import ModerationEvent
+        from gdpr import run_retention_cleanup
+
+        async def _run():
+            async with AsyncSessionLocal() as db:
+                rows = [ModerationEvent(content_type="text", verdict="allow", **e) for e in events]
+                db.add_all(rows)
+                await db.commit()
+                ids = [r.id for r in rows]
+            async with AsyncSessionLocal() as db:
+                await run_retention_cleanup(db)
+            async with AsyncSessionLocal() as db:
+                remaining = (
+                    await db.execute(select(ModerationEvent.id).where(ModerationEvent.id.in_(ids)))
+                ).scalars().all()
+            return ids, set(remaining)
+
+        return client.portal.call(_run)
+
+    def test_old_event_deleted_after_retention_is_shortened(self, client, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
+        import config
+
+        now = datetime.now(tz=timezone.utc)
+        monkeypatch.setattr(config.settings, "data_retention_days", 7)
+        ids, remaining = self._insert_and_cleanup(
+            client,
+            [
+                # logged under a 30-day policy 10 days ago; policy is now 7 days
+                {"timestamp": now - timedelta(days=10), "expires_at": now + timedelta(days=20)},
+                # legacy/foreign row without expires_at
+                {"timestamp": now - timedelta(days=10), "expires_at": None},
+                # recent row — must survive
+                {"timestamp": now - timedelta(days=1), "expires_at": now + timedelta(days=6)},
+            ],
+        )
+        assert remaining == {ids[2]}
+
+    def test_expired_event_still_deleted(self, client):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(tz=timezone.utc)
+        ids, remaining = self._insert_and_cleanup(
+            client,
+            [
+                {"timestamp": now - timedelta(days=1), "expires_at": now - timedelta(seconds=1)},
+                # server-default timestamp (CURRENT_TIMESTAMP), not yet expired
+                {"expires_at": now + timedelta(days=1)},
+            ],
+        )
+        assert remaining == {ids[1]}

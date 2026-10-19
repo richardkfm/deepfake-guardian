@@ -28,7 +28,7 @@ from typing import Any
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -70,14 +70,25 @@ def hash_id(platform: str, raw_id: str | int) -> str:
 async def run_retention_cleanup(session: AsyncSession) -> int:
     """Delete ModerationEvents whose retention window has expired.
 
+    A row is expired when its stored ``expires_at`` has passed *or* it is
+    older than the currently configured ``DATA_RETENTION_DAYS`` — so
+    shortening the retention period also applies to rows logged under the
+    old policy, and rows without ``expires_at`` are not kept forever.
+
     Returns the number of deleted rows.
     """
     now = datetime.now(tz=timezone.utc)
+    cutoff = now - timedelta(days=settings.data_retention_days)
     result = await session.execute(
         delete(ModerationEvent)
         .where(
-            ModerationEvent.expires_at.isnot(None),
-            ModerationEvent.expires_at <= now,
+            or_(
+                and_(
+                    ModerationEvent.expires_at.isnot(None),
+                    ModerationEvent.expires_at <= now,
+                ),
+                ModerationEvent.timestamp <= cutoff,
+            )
         )
         .returning(ModerationEvent.id)
     )
