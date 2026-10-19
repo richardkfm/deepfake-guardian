@@ -45,8 +45,8 @@ class ModerationRegistry:
         for path in sorted(_SKILLS_DIR.glob("*.md")):
             try:
                 skill = load_skill(path)
-            except Exception:
-                logger.warning("Failed to load moderation skill: %s", path.name)
+            except Exception as exc:
+                logger.warning("Failed to load moderation skill %s: %s", path.name, exc)
                 continue
             if skill.category_id in cls._skills:
                 logger.warning("Duplicate moderation skill id: %s", skill.category_id)

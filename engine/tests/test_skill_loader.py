@@ -189,3 +189,48 @@ thresholds: { default: 0.5 }
         pack = MagicMock(get_patterns=MagicMock(return_value=parsed))
         score = score_cyberbullying("zzbully", pack)
         assert ModerationScores(cyberbullying=score).cyberbullying == pytest.approx(1.0)
+
+
+class TestFrontmatterRobustness:
+    _BODY = """---
+category_id: demo
+core: false
+thresholds: { default: 0.5 }
+---
+
+## Patterns (en)
+- weight: 0.6  `(?i)\\bok\\b`
+"""
+
+    def test_utf8_bom_is_tolerated(self, tmp_path):
+        """Windows editors (Notepad) save UTF-8 with a BOM; the skill must
+        still load instead of being dropped as 'missing frontmatter'."""
+        path = tmp_path / "demo.md"
+        path.write_text(self._BODY, encoding="utf-8-sig")
+        skill = load_skill(path)
+        assert skill.category_id == "demo"
+        assert skill.core is False
+
+    def test_crlf_line_endings_are_tolerated(self, tmp_path):
+        path = tmp_path / "demo.md"
+        path.write_bytes(self._BODY.replace("\n", "\r\n").encode("utf-8"))
+        skill = load_skill(path)
+        assert skill.core is False
+        assert len(skill.patterns["en"]) == 1
+
+    @pytest.mark.parametrize("raw", ['"false"', "'False'", '"no"', '"0"', "false", "no"])
+    def test_quoted_false_core_flag_is_false(self, tmp_path, raw):
+        """bool("false") is True, so a quoted value used to turn an opt-in
+        category into an always-on core category."""
+        path = _write(tmp_path, "demo.md", self._BODY.replace("core: false", f"core: {raw}"))
+        assert load_skill(path).core is False
+
+    @pytest.mark.parametrize("raw", ['"true"', "true", "yes", '"1"'])
+    def test_truthy_core_flag_is_true(self, tmp_path, raw):
+        path = _write(tmp_path, "demo.md", self._BODY.replace("core: false", f"core: {raw}"))
+        assert load_skill(path).core is True
+
+    def test_unrecognised_core_flag_rejected(self, tmp_path):
+        path = _write(tmp_path, "demo.md", self._BODY.replace("core: false", 'core: "maybe"'))
+        with pytest.raises(ValueError):
+            load_skill(path)
