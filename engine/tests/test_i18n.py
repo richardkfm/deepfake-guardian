@@ -260,3 +260,16 @@ class TestDetectLanguage:
             mock_settings.enabled_languages = []
             result = detect_language("some text")
         assert result == "en"
+
+
+class TestDetectionDeterminism:
+    def test_same_text_always_detected_as_same_language(self):
+        """langdetect is randomised unless seeded: 'du bist' flipped between
+        'de' and 'en' across calls, routing one message to different packs
+        (and thresholds/patterns) from one request to the next."""
+        pytest.importorskip("langdetect")
+        from i18n.detector import detect_language
+
+        for text in ("du bist", "Ich bin", "na und"):
+            results = {detect_language(text) for _ in range(40)}
+            assert len(results) == 1, (text, results)
