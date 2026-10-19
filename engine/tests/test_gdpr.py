@@ -55,13 +55,23 @@ class TestGDPRExport:
             "protected_images",
         }
 
-    def test_export_includes_protected_image_hashes(self, client, small_image_b64):
+    def test_export_includes_protected_image_hashes(self, client):
         """Article 15: everything stored against the user's hash must be exported,
         including protected-image hashes (and their free-text note)."""
+        import base64
+        import io
+
+        from PIL import Image
+
+        # Flat images are refused as protected images (their phash would
+        # match every blank frame), so register an image with real detail.
+        img = Image.radial_gradient("L").convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
         sub = client.post(
             "/protected_images",
             json={
-                "image_base64": small_image_b64,
+                "image_base64": base64.b64encode(buf.getvalue()).decode(),
                 "user_id": "export-ncii-user",
                 "platform": "telegram",
                 "note": "my photo",
@@ -77,7 +87,8 @@ class TestGDPRExport:
         exported = resp.json()["protected_images"]
         assert [p["id"] for p in exported] == [protected_id]
         assert exported[0]["note"] == "my photo"
-        assert exported[0]["hash_type"] == "phash"
+        # Full-image phash plus centre-crop phashes (known_content.HASH_TYPE_SET)
+        assert exported[0]["hash_type"] == "phash_set"
 
     def test_export_includes_consent_records(self, client):
         from database import AsyncSessionLocal

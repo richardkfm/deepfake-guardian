@@ -55,10 +55,10 @@ class TestHammingDistance:
 
 
 class TestSubmitAndDeleteProtectedImage:
-    def test_submit_returns_id(self, client, small_image_b64):
+    def test_submit_returns_id(self, client):
         resp = client.post(
             "/protected_images",
-            json={"image_base64": small_image_b64, "user_id": "victim-1", "platform": "telegram"},
+            json={"image_base64": _b64(_pattern_image(11)), "user_id": "victim-1", "platform": "telegram"},
         )
         assert resp.status_code == 200
         body = resp.json()
@@ -71,10 +71,10 @@ class TestSubmitAndDeleteProtectedImage:
         )
         assert resp.status_code == 400
 
-    def test_delete_by_submitter_succeeds(self, client, small_image_b64):
+    def test_delete_by_submitter_succeeds(self, client):
         submit = client.post(
             "/protected_images",
-            json={"image_base64": small_image_b64, "user_id": "victim-2", "platform": "telegram"},
+            json={"image_base64": _b64(_pattern_image(12)), "user_id": "victim-2", "platform": "telegram"},
         )
         protected_id = submit.json()["id"]
 
@@ -86,10 +86,10 @@ class TestSubmitAndDeleteProtectedImage:
         assert resp.status_code == 200
         assert resp.json()["status"] == "deleted"
 
-    def test_delete_by_non_submitter_returns_404(self, client, small_image_b64):
+    def test_delete_by_non_submitter_returns_404(self, client):
         submit = client.post(
             "/protected_images",
-            json={"image_base64": small_image_b64, "user_id": "victim-3", "platform": "telegram"},
+            json={"image_base64": _b64(_pattern_image(13)), "user_id": "victim-3", "platform": "telegram"},
         )
         protected_id = submit.json()["id"]
 
@@ -110,14 +110,15 @@ class TestSubmitAndDeleteProtectedImage:
 
 
 class TestKnownHashMatchingDisabledByDefault:
-    def test_matching_image_allowed_when_feature_off(self, client, small_image_b64):
+    def test_matching_image_allowed_when_feature_off(self, client):
         """KNOWN_IMAGE_HASH_MATCHING defaults to False — registering an image
         as protected must not affect moderation until explicitly enabled."""
+        protected_b64 = _b64(_pattern_image(14))
         client.post(
             "/protected_images",
-            json={"image_base64": small_image_b64, "user_id": "victim-4", "platform": "telegram"},
+            json={"image_base64": protected_b64, "user_id": "victim-4", "platform": "telegram"},
         )
-        resp = client.post("/moderate_image", json={"image_base64": small_image_b64})
+        resp = client.post("/moderate_image", json={"image_base64": protected_b64})
         assert resp.status_code == 200
         assert "known_ncii_match" not in resp.json()["reasons"]
 

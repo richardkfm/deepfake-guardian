@@ -152,6 +152,14 @@ class Settings:
         self.known_image_hash_threshold: int = int(
             os.getenv("KNOWN_IMAGE_HASH_THRESHOLD", "10")
         )
+        # Also match mirrored copies and re-crops of protected images (each
+        # protected image is hashed at several crops when registered). More
+        # recall against deliberate evasion, at the cost of more hash
+        # comparisons and a proportionally higher false-match rate. Off by
+        # default — exact-orientation, near-full-frame matching only.
+        self.known_image_hash_robust_matching: bool = os.getenv(
+            "KNOWN_IMAGE_HASH_ROBUST_MATCHING", "false"
+        ).strip().lower() in ("1", "true", "yes")
 
         # GDPR / persistence
         self.database_url: str = os.getenv(

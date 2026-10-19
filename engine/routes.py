@@ -158,14 +158,19 @@ async def _apply_known_hash_override(
     if not settings.known_image_hash_matching:
         return result
 
-    from known_content import find_match
+    from known_content import find_match_any
 
-    for image in images:
-        match = await find_match(session, image, settings.known_image_hash_threshold)
-        if match is not None:
-            logger.info("known_ncii_hash_match", protected_id=match.id)
-            reasons = list(dict.fromkeys([*result.reasons, "known_ncii_match"]))
-            return result.model_copy(update={"verdict": "delete", "reasons": reasons})
+    # One DB read for all images/frames; hashing runs off the event loop.
+    match = await find_match_any(
+        session,
+        images,
+        settings.known_image_hash_threshold,
+        robust=settings.known_image_hash_robust_matching,
+    )
+    if match is not None:
+        logger.info("known_ncii_hash_match", protected_id=match.id)
+        reasons = list(dict.fromkeys([*result.reasons, "known_ncii_match"]))
+        return result.model_copy(update={"verdict": "delete", "reasons": reasons})
     return result
 
 
