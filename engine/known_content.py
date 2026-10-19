@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 import imagehash
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -342,7 +343,7 @@ async def submit_protected_image(
         image = await run_in_threadpool(decode_image_bytes, data)
     except MediaFetchError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    except MediaDecodeError as exc:
+    except (MediaDecodeError, httpx.HTTPError) as exc:
         raise HTTPException(status_code=400, detail=f"Could not decode image: {exc}") from exc
     del data
     if is_low_information(image):

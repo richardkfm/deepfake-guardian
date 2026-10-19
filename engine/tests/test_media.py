@@ -187,6 +187,20 @@ class TestRoutesRejectBadImages:
             resp = client.post("/moderate_image", json={"image_url": "https://example.test/a.png"})
         assert resp.status_code == 200
 
+    @pytest.mark.parametrize("path", ["/moderate_image", "/protected_images"])
+    def test_unreachable_url_returns_400(self, client, path):
+        import httpx
+
+        async def _fail(url, timeout):
+            raise httpx.ConnectError("connection refused")
+
+        with patch("routes.fetch_media_url", side_effect=_fail):
+            resp = client.post(
+                path,
+                json={"image_url": "https://example.test/a.png", "user_id": "u", "platform": "t"},
+            )
+        assert resp.status_code == 400
+
     def test_decode_image_never_fetches_urls(self):
         """URLs must go through the SSRF-checked routes.fetch_media_url."""
         from classifiers import decode_image

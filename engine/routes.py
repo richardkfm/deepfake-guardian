@@ -329,8 +329,9 @@ async def moderate_image(
         frames = await run_in_threadpool(load_image_frames, data, settings.max_frames)
     except MediaFetchError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    except MediaDecodeError as exc:
-        # Malformed base64, non-image bytes, decompression bombs: client errors.
+    except (MediaDecodeError, httpx.HTTPError) as exc:
+        # Malformed base64, non-image bytes, decompression bombs or an
+        # unreachable URL are client errors, not 500s.
         raise HTTPException(status_code=400, detail=f"Could not decode image: {exc}") from exc
     del data  # only the decoded frames are needed from here on
 
