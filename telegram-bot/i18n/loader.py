@@ -34,7 +34,12 @@ def _load(lang: str) -> dict[str, str]:
     return _cache[lang]
 
 
-def get_message(key: str, lang: str = _FALLBACK_LANG, **kwargs: str) -> str:
+def available_languages() -> frozenset[str]:
+    """Return the language codes that ship a message file (e.g. ``{"en", "de"}``)."""
+    return frozenset(path.stem for path in _MESSAGES_DIR.glob("*.json"))
+
+
+def get_message(key: str, lang: str = _FALLBACK_LANG, **kwargs: object) -> str:
     """Return a localised, formatted message string.
 
     Args:

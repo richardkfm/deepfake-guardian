@@ -46,8 +46,64 @@ and [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`).
   silently overrode `MODERATION_PROFILE` while the file's own comment said to
   leave them commented out; they are now commented and match the `default`
   profile.
+- **Security:** `image_url`/`video_url` (and `/protected_images`) are fetched
+  through an SSRF-guarded async helper — http(s) only, private/loopback/
+  link-local targets refused on every redirect hop, streamed size cap
+  (`MAX_MEDIA_BYTES`, 413 when exceeded). API keys are compared in constant
+  time. `.dockerignore` files keep `.env` secrets and local DBs out of images,
+  and compose publishes the engine on `127.0.0.1` only.
+- **GDPR:** retention cleanup and Article 17 erasure now run periodically
+  (`GDPR_CLEANUP_INTERVAL_MINUTES`, default 60) instead of only at startup, and
+  honour a lowered `DATA_RETENTION_DAYS` for existing rows. The Article 15
+  export now includes consent records and protected-image entries.
+- **Config:** `MODERATION_PROFILE`, `ENABLED_CATEGORIES` and
+  `ENABLED_LANGUAGES` are case/whitespace-insensitive (unknown profiles warn);
+  blank `THRESHOLD_*` values no longer crash startup.
+- **Skills:** quoted booleans (`core: "false"`) and BOM-prefixed files are
+  parsed correctly; malformed or >1 pattern weights are skipped/clamped;
+  core categories honour their `flag_threshold`. The `permissive` NSFW
+  threshold (0.75) was stricter than `default` and is now 0.9.
+- **i18n:** the German ML classifier contributes scores again (nested pipeline
+  output was mis-parsed, and long messages were not truncated); language
+  detection is deterministic; `/moderate_text` language hints such as `EN`
+  or `en-US` are normalised.
+- **Images/video:** undecodable or oversized media returns 400 instead of 500;
+  EXIF orientation is applied; 16-bit images are rescaled; animated
+  GIF/WebP/APNG are analysed frame by frame; video frames are sampled across
+  the whole (capped) duration instead of the first ~20 s, and containers
+  without a usable frame count are decoded sequentially. Analysis runs in a
+  thread pool so it no longer blocks the event loop.
+- **Unanalysable videos no longer fail open.** A video that yields no frames
+  now returns `flag` with reason `unanalysable_video` instead of `allow`.
+  Both bots ask the admins to review it but record no warning against the
+  sender, since a broken file is not a violation.
+- **Deepfake:** a raising detector or layer no longer fails the request;
+  NaN/out-of-range scores are clamped; small faces get a second
+  full-range MediaPipe pass; two-class ONNX outputs use the "fake" class;
+  `/health` lists available/unavailable layers.
+- **Known-NCII hashing:** hashes are computed after EXIF rotation and border
+  trimming; flat images are refused at registration; the protected list is
+  read once per request.
+- **Telegram bot:** captions, images/videos sent as documents, GIFs, video
+  notes, stickers and `/unknown <text>` messages are moderated; post-delete
+  notices are actually delivered (no reply to a deleted message); one notice
+  per verdict; the *Delete messages* right is checked; only transient engine
+  errors are retried; the bot token and raw user IDs no longer reach logs.
+- **WhatsApp bot:** converted to ESM (Baileys is ESM-only and crashed on Node
+  < 20.19); admin status is checked before deleting (non-admin deletes were
+  silent no-ops); view-once, captions, stickers, documents and edits are
+  moderated; Axios errors no longer leak message content or the API key.
+- CI pins `ruff` and `mypy`; OpenCV pinned to a NumPy-2-compatible build.
 
 ### Added
+- **Bots:** `ENGINE_TIMEOUT_SECONDS`, `MAX_MEDIA_MB` and
+  `ADMIN_MENTION_COOLDOWN_SECONDS` (per-chat admin-mention rate limit) for both
+  bots; Telegram `/my_data` (Article 15); WhatsApp reaches Telegram parity with
+  warnings/escalation, en/de messages and `/privacy`, `/my_data`,
+  `/delete_my_data` commands.
+- **Engine:** `DEEPFAKE_MAX_FACES` (largest-N faces to the detector) and
+  opt-in `KNOWN_IMAGE_HASH_ROBUST_MATCHING` (mirrored copies and centre crops
+  match protected images).
 - **Known-NCII-hash matching** — a StopNCII.org-style opt-in protective layer
   (`KNOWN_IMAGE_HASH_MATCHING`, `engine/known_content.py`): a victim or admin
   registers the perceptual hash of a specific non-consensual image via

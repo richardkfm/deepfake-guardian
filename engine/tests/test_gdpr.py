@@ -51,7 +51,68 @@ class TestGDPRExport:
             "moderation_events",
             "warning_records",
             "deletion_requests",
+            "consent_records",
+            "protected_images",
         }
+
+    def test_export_includes_protected_image_hashes(self, client):
+        """Article 15: everything stored against the user's hash must be exported,
+        including protected-image hashes (and their free-text note)."""
+        import base64
+        import io
+
+        from PIL import Image
+
+        # Flat images are refused as protected images (their phash would
+        # match every blank frame), so register an image with real detail.
+        img = Image.radial_gradient("L").convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        sub = client.post(
+            "/protected_images",
+            json={
+                "image_base64": base64.b64encode(buf.getvalue()).decode(),
+                "user_id": "export-ncii-user",
+                "platform": "telegram",
+                "note": "my photo",
+            },
+        )
+        assert sub.status_code == 200
+        protected_id = sub.json()["id"]
+
+        resp = client.post(
+            "/gdpr/export", json={"user_id": "export-ncii-user", "platform": "telegram"}
+        )
+        assert resp.status_code == 200
+        exported = resp.json()["protected_images"]
+        assert [p["id"] for p in exported] == [protected_id]
+        assert exported[0]["note"] == "my photo"
+        # Full-image phash plus centre-crop phashes (known_content.HASH_TYPE_SET)
+        assert exported[0]["hash_type"] == "phash_set"
+
+    def test_export_includes_consent_records(self, client):
+        from database import AsyncSessionLocal
+        from db_models import ConsentRecord
+        from gdpr import hash_id
+
+        async def _insert() -> None:
+            async with AsyncSessionLocal() as db:
+                db.add(
+                    ConsentRecord(
+                        user_id_hash=hash_id("telegram", "export-consent-user"),
+                        platform="telegram",
+                        consent_given=True,
+                    )
+                )
+                await db.commit()
+
+        client.portal.call(_insert)
+        resp = client.post(
+            "/gdpr/export", json={"user_id": "export-consent-user", "platform": "telegram"}
+        )
+        records = resp.json()["consent_records"]
+        assert len(records) == 1
+        assert records[0]["consent_given"] is True
 
     def test_export_hash_is_deterministic(self, client):
         resp1 = client.post("/gdpr/export", json={"user_id": "u42", "platform": "telegram"})
@@ -117,3 +178,119 @@ class TestGDPRDeleteRequest:
         )
         assert resp.status_code == 200
         assert resp.json()["status"] == "pending"
+
+
+class TestPeriodicHousekeeping:
+    """Retention cleanup and Article 17 erasure must not only run at startup.
+
+    A long-running engine would otherwise keep moderation events past
+    DATA_RETENTION_DAYS and never execute erasure requests submitted after
+    boot, despite promising erasure "within 30 days".
+    """
+
+    def test_housekeeping_runs_repeatedly_while_app_is_up(self, monkeypatch):
+        import time
+        from unittest.mock import AsyncMock, patch
+
+        from fastapi.testclient import TestClient
+
+        import config
+        import gdpr
+
+        monkeypatch.setattr(config.settings, "gdpr_cleanup_interval_minutes", 0.0005)
+        cleanup = AsyncMock(return_value=0)
+        erasure = AsyncMock(return_value=0)
+        with (
+            patch.object(gdpr, "run_retention_cleanup", cleanup),
+            patch.object(gdpr, "process_pending_deletions", erasure),
+        ):
+            from main import app
+
+            with TestClient(app):
+                deadline = time.monotonic() + 3
+                while cleanup.await_count < 3 and time.monotonic() < deadline:
+                    time.sleep(0.02)
+
+        assert cleanup.await_count >= 3  # startup + periodic runs
+        assert erasure.await_count >= 3
+
+    def test_loop_survives_a_failing_iteration(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        import gdpr
+
+        calls = AsyncMock(side_effect=[RuntimeError("db down"), (0, 0), (0, 0), (0, 0)])
+
+        async def _run() -> None:
+            with patch.object(gdpr, "run_gdpr_housekeeping", calls):
+                task = asyncio.create_task(gdpr.gdpr_housekeeping_loop(0.001))
+                for _ in range(200):
+                    if calls.await_count >= 3:
+                        break
+                    await asyncio.sleep(0.005)
+                task.cancel()
+
+        asyncio.run(_run())
+        assert calls.await_count >= 3
+
+
+class TestRetentionCleanup:
+    """Storage limitation must follow the *current* DATA_RETENTION_DAYS."""
+
+    def _insert_and_cleanup(self, client, events):
+        from sqlalchemy import select
+
+        from database import AsyncSessionLocal
+        from db_models import ModerationEvent
+        from gdpr import run_retention_cleanup
+
+        async def _run():
+            async with AsyncSessionLocal() as db:
+                rows = [ModerationEvent(content_type="text", verdict="allow", **e) for e in events]
+                db.add_all(rows)
+                await db.commit()
+                ids = [r.id for r in rows]
+            async with AsyncSessionLocal() as db:
+                await run_retention_cleanup(db)
+            async with AsyncSessionLocal() as db:
+                remaining = (
+                    await db.execute(select(ModerationEvent.id).where(ModerationEvent.id.in_(ids)))
+                ).scalars().all()
+            return ids, set(remaining)
+
+        return client.portal.call(_run)
+
+    def test_old_event_deleted_after_retention_is_shortened(self, client, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
+        import config
+
+        now = datetime.now(tz=timezone.utc)
+        monkeypatch.setattr(config.settings, "data_retention_days", 7)
+        ids, remaining = self._insert_and_cleanup(
+            client,
+            [
+                # logged under a 30-day policy 10 days ago; policy is now 7 days
+                {"timestamp": now - timedelta(days=10), "expires_at": now + timedelta(days=20)},
+                # legacy/foreign row without expires_at
+                {"timestamp": now - timedelta(days=10), "expires_at": None},
+                # recent row — must survive
+                {"timestamp": now - timedelta(days=1), "expires_at": now + timedelta(days=6)},
+            ],
+        )
+        assert remaining == {ids[2]}
+
+    def test_expired_event_still_deleted(self, client):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(tz=timezone.utc)
+        ids, remaining = self._insert_and_cleanup(
+            client,
+            [
+                {"timestamp": now - timedelta(days=1), "expires_at": now - timedelta(seconds=1)},
+                # server-default timestamp (CURRENT_TIMESTAMP), not yet expired
+                {"expires_at": now + timedelta(days=1)},
+            ],
+        )
+        assert remaining == {ids[1]}

@@ -4,7 +4,7 @@ display_name: NSFW / Inappropriate
 core: true
 order: 30
 modalities: [text, image, video]
-thresholds: { minors_strict: 0.4, default: 0.8, permissive: 0.75 }
+thresholds: { minors_strict: 0.4, default: 0.8, permissive: 0.9 }
 flag_threshold: 0.4
 ---
 

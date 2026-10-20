@@ -15,6 +15,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _env_float(name: str, default: float) -> float:
+    """Read a float env var; unset or blank (``NAME=``) means *default*."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return float(raw)
+
+
 class Settings:
     """Central settings — all values come from env vars with sane defaults."""
 
@@ -31,7 +39,7 @@ class Settings:
 
         # i18n — comma-separated list of enabled language codes
         self.enabled_languages: list[str] = [
-            lang.strip()
+            lang.strip().lower()
             for lang in os.getenv("ENABLED_LANGUAGES", "en,de").split(",")
             if lang.strip()
         ]
@@ -39,33 +47,31 @@ class Settings:
         # Opt-in moderation categories — comma-separated list of skill ids
         # (e.g. "advertising,political_misinformation").  Core child-safety
         # categories are always on; these run only when listed here.
+        # Skill ids are lowercase, so normalise case to avoid silently ignoring
+        # e.g. "Advertising".
         self.enabled_categories: list[str] = [
-            cat.strip()
+            cat.strip().lower()
             for cat in os.getenv("ENABLED_CATEGORIES", "").split(",")
             if cat.strip()
         ]
 
         # Moderation profile — sets default thresholds; individual env vars override
-        self.moderation_profile: str = os.getenv("MODERATION_PROFILE", "default")
+        from profiles import get_profile, normalise_profile_name
 
-        from profiles import get_profile
+        self.moderation_profile: str = normalise_profile_name(
+            os.getenv("MODERATION_PROFILE", "default")
+        )
 
         profile = get_profile(self.moderation_profile)
 
-        self.threshold_violence: float = float(
-            os.getenv("THRESHOLD_VIOLENCE", str(profile.violence))
+        self.threshold_violence: float = _env_float("THRESHOLD_VIOLENCE", profile.violence)
+        self.threshold_sexual_violence: float = _env_float(
+            "THRESHOLD_SEXUAL_VIOLENCE", profile.sexual_violence
         )
-        self.threshold_sexual_violence: float = float(
-            os.getenv("THRESHOLD_SEXUAL_VIOLENCE", str(profile.sexual_violence))
-        )
-        self.threshold_nsfw: float = float(
-            os.getenv("THRESHOLD_NSFW", str(profile.nsfw))
-        )
-        self.threshold_deepfake: float = float(
-            os.getenv("THRESHOLD_DEEPFAKE", str(profile.deepfake))
-        )
-        self.threshold_cyberbullying: float = float(
-            os.getenv("THRESHOLD_CYBERBULLYING", str(profile.cyberbullying))
+        self.threshold_nsfw: float = _env_float("THRESHOLD_NSFW", profile.nsfw)
+        self.threshold_deepfake: float = _env_float("THRESHOLD_DEEPFAKE", profile.deepfake)
+        self.threshold_cyberbullying: float = _env_float(
+            "THRESHOLD_CYBERBULLYING", profile.cyberbullying
         )
 
         # Deepfake detection provider: openai | ollama | local | sightengine | api | stub
@@ -93,6 +99,11 @@ class Settings:
         ]
         # How multiple active layers' scores combine: max | mean | weighted_mean
         self.deepfake_layer_combine: str = os.getenv("DEEPFAKE_LAYER_COMBINE", "max")
+        # Only the N largest faces in an image/frame are sent to the deepfake
+        # detector(s). 0 (default) = score every detected face. Bounds the
+        # latency/cost of crowd photos with remote providers, which make one
+        # API call per face.
+        self.deepfake_max_faces: int = int(os.getenv("DEEPFAKE_MAX_FACES", "0"))
 
         # OpenAI provider (DEEPFAKE_PROVIDER=openai)
         self.openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
@@ -115,6 +126,16 @@ class Settings:
         self.max_frames: int = int(os.getenv("MAX_FRAMES", "10"))
         self.max_video_duration: int = int(os.getenv("MAX_VIDEO_DURATION", "300"))
 
+        # image_url / video_url fetching (routes.fetch_media_url).  URLs that
+        # resolve to private, loopback, link-local or otherwise reserved
+        # addresses are refused (SSRF protection) unless explicitly allowed,
+        # e.g. for a trusted internal media store.
+        self.media_url_allow_private: bool = os.getenv(
+            "MEDIA_URL_ALLOW_PRIVATE", "false"
+        ).strip().lower() in ("1", "true", "yes")
+        # Maximum bytes downloaded from a media URL (default 50 MiB)
+        self.max_media_bytes: int = int(os.getenv("MAX_MEDIA_BYTES", str(50 * 1024 * 1024)))
+
         # Known non-consensual intimate imagery (NCII) hash matching — opt-in.
         # When enabled, incoming images/video frames are perceptually hashed
         # and compared against victim/admin-submitted protected hashes (see
@@ -131,6 +152,14 @@ class Settings:
         self.known_image_hash_threshold: int = int(
             os.getenv("KNOWN_IMAGE_HASH_THRESHOLD", "10")
         )
+        # Also match mirrored copies and re-crops of protected images (each
+        # protected image is hashed at several crops when registered). More
+        # recall against deliberate evasion, at the cost of more hash
+        # comparisons and a proportionally higher false-match rate. Off by
+        # default — exact-orientation, near-full-frame matching only.
+        self.known_image_hash_robust_matching: bool = os.getenv(
+            "KNOWN_IMAGE_HASH_ROBUST_MATCHING", "false"
+        ).strip().lower() in ("1", "true", "yes")
 
         # GDPR / persistence
         self.database_url: str = os.getenv(
@@ -140,6 +169,11 @@ class Settings:
         self.gdpr_salt: str = os.getenv("GDPR_SALT", "change-me-in-production")
         # How many days moderation events are kept before automatic deletion
         self.data_retention_days: int = int(os.getenv("DATA_RETENTION_DAYS", "30"))
+        # How often (minutes) retention cleanup and pending Article 17 erasure
+        # requests run while the engine is up (they also run at startup).
+        self.gdpr_cleanup_interval_minutes: float = float(
+            os.getenv("GDPR_CLEANUP_INTERVAL_MINUTES", "60")
+        )
 
 
 settings = Settings()

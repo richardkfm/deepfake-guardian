@@ -29,7 +29,7 @@ jobs:
           cache-dependency-path: engine/requirements.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt ruff mypy
+        run: pip install -r requirements.txt ruff==0.17.1 mypy==2.4.0
 
       - name: Lint (ruff)
         run: ruff check .
@@ -62,7 +62,7 @@ jobs:
           cache-dependency-path: telegram-bot/requirements.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt ruff
+        run: pip install -r requirements.txt ruff==0.17.1
 
       - name: Lint (ruff)
         run: ruff check .
@@ -71,7 +71,7 @@ jobs:
         run: pytest
 
   # ---------------------------------------------------------------------------
-  # WhatsApp bot — build TypeScript
+  # WhatsApp bot — build TypeScript + tests
   # ---------------------------------------------------------------------------
   whatsapp-bot:
     name: WhatsApp Bot (TypeScript)
@@ -96,3 +96,6 @@ jobs:
 
       - name: Build TypeScript
         run: npm run build
+
+      - name: Run tests
+        run: npm test

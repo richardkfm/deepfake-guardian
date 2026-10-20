@@ -2,11 +2,16 @@
   "name": "whatsapp-moderation-bot",
   "version": "0.1.0",
   "description": "WhatsApp group moderation bot using Baileys and the moderation engine API",
+  "type": "module",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts"
+    "dev": "tsc && node dist/index.js",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.16",

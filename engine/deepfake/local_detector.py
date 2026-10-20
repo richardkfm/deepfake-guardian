@@ -35,6 +35,8 @@ def _preprocess(face: Image.Image) -> np.ndarray:
     Returns:
         numpy array of shape (1, 3, 224, 224) float32.
     """
+    if face.mode != "RGB":
+        face = face.convert("RGB")
     face_resized = face.resize((INPUT_SIZE, INPUT_SIZE), Image.Resampling.BILINEAR)
     arr = np.array(face_resized, dtype=np.float32) / 255.0
     arr = (arr - _MEAN) / _STD
@@ -49,6 +51,23 @@ def _sigmoid(x: float) -> float:
         return 1.0 / (1.0 + np.exp(-x))
     exp_x = np.exp(x)
     return exp_x / (1.0 + exp_x)
+
+
+def _output_to_score(output: np.ndarray) -> float:
+    """Map the model's raw output for one face to a fake-probability.
+
+    * one value  -> a single "fake" logit: ``sigmoid(logit)`` (the shipped
+      EfficientNet-B0 contract).
+    * two values -> ``[real, fake]`` class logits: ``softmax(...)[1]``. Taking
+      element 0 here (the previous behaviour) would sigmoid the *real* logit
+      and invert the verdict for this common export format.
+    """
+    flat = np.asarray(output, dtype=np.float64).flatten()
+    if flat.size == 2:
+        shifted = flat - flat.max()
+        exp = np.exp(shifted)
+        return float(exp[1] / exp.sum())
+    return float(_sigmoid(float(flat[0])))
 
 
 class LocalOnnxDetector(DeepfakeDetector):
@@ -101,11 +120,18 @@ class LocalOnnxDetector(DeepfakeDetector):
         scores: list[float] = []
 
         for face in face_images:
-            tensor = _preprocess(face)
-            outputs = session.run(None, {input_name: tensor})
-            logit = float(outputs[0].flatten()[0])
-            score = _sigmoid(logit)
-            scores.append(score)
+            # Same contract as the cloud providers: one bad crop (or a model
+            # whose input/output shape doesn't match) costs that face its
+            # score, not the whole request.
+            try:
+                tensor = _preprocess(face)
+                outputs = session.run(None, {input_name: tensor})
+                score = _output_to_score(outputs[0])
+            except Exception:
+                logger.exception("ONNX deepfake inference failed for face crop")
+                scores.append(BASELINE_SCORE)
+                continue
+            scores.append(BASELINE_SCORE if np.isnan(score) else score)
 
         return scores
 

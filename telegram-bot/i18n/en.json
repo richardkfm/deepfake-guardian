@@ -1,17 +1,20 @@
 {
   "flagged_content": "⚠️ Flagged content ({reasons}). Admins: {mentions}",
   "flagged_content_no_admins": "⚠️ Flagged content ({reasons}).",
+  "delete_failed": "⚠️ This message breaks the community guidelines ({reasons}) but I cannot delete it — please remove it and give me the \"Delete messages\" admin right. Admins: {mentions}",
+  "delete_failed_no_admins": "⚠️ This message breaks the community guidelines ({reasons}) but I cannot delete it. An admin should remove it and give me the \"Delete messages\" admin right.",
   "cyberbullying_notice": "⚠️ This message may contain cyberbullying ({reasons}). Admins: {mentions}",
   "cyberbullying_notice_no_admins": "⚠️ This message may contain cyberbullying ({reasons}).",
-
   "warning_notice": "⚠️ Your message was removed because it violated community guidelines ({reasons}). Please keep this space safe and respectful. This is your first notice.",
   "warning_admin_notification": "⚠️ Repeated violation by {mention} ({reasons}). Admins: {admin_mentions}",
   "warning_admin_notification_no_admins": "⚠️ Repeated violation ({reasons}). This is warning #{count} for this user.",
   "warning_supervisor_escalation": "🚨 Persistent violations by {mention} ({reasons}) — {count} incidents recorded. Admins: {admin_mentions} — please review and take action.",
   "warning_supervisor_escalation_no_admins": "🚨 Persistent violations ({reasons}) — {count} incidents recorded. Please review and take action.",
-
-  "privacy_notice": "🔒 *Privacy Notice*\n\nDeepfake Guardian moderates content in this group to protect all members. Here is how your data is handled:\n\n• Messages are analysed for harmful content but *never stored*.\n• Only metadata (verdict, category scores) is logged — no message text.\n• Your user ID is stored as a one-way hash (never in plain text).\n• All data is automatically deleted after 30 days.\n• You can request deletion of your data at any time.\n\nType /delete_my_data to submit an erasure request (GDPR Article 17).",
+  "privacy_notice": "🔒 <b>Privacy Notice</b>\n\nDeepfake Guardian moderates content in this group to protect all members. Here is how your data is handled:\n\n• Messages are analysed for harmful content but <b>never stored</b>.\n• Only metadata (verdict, category scores) is logged — no message text.\n• Your user ID is stored as a one-way hash (never in plain text).\n• All data is automatically deleted after 30 days.\n• You can request deletion of your data at any time.\n\nSend /my_data to me in a private chat to see what is stored about you (GDPR Article 15).\nType /delete_my_data to submit an erasure request (GDPR Article 17).",
   "delete_my_data_submitted": "✅ Your data deletion request has been submitted (request ID: {request_id}). All stored data associated with your account will be erased within 30 days.",
   "delete_my_data_already_pending": "ℹ️ A deletion request is already pending for your account (request ID: {request_id}). Your data will be erased within 30 days.",
-  "delete_my_data_error": "❌ Could not submit your deletion request. Please try again later or contact an admin."
+  "delete_my_data_error": "❌ Could not submit your deletion request. Please try again later or contact an admin.",
+  "my_data_private_only": "🔒 To protect your privacy, please send /my_data to me in a private chat.",
+  "my_data_summary": "🔒 <b>Your stored data</b>\n\nPseudonymous ID: <code>{user_hash}…</code>\n• Moderation events: {events}\n• Warning records: {warnings}\n• Deletion requests: {deletion_requests}\n\nNo message content is ever stored. Type /delete_my_data to request erasure.",
+  "my_data_error": "❌ Could not retrieve your data. Please try again later or contact an admin."
 }

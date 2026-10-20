@@ -15,7 +15,13 @@ langdetect==1.0.9
 sqlalchemy==2.0.36
 aiosqlite==0.20.0
 onnxruntime==1.17.0
-opencv-python-headless==4.9.0.80
+# 4.10.0.84 is the first OpenCV built for the NumPy 2 ABI (4.9.x fails to
+# import with numpy 2.x: "_ARRAY_API not found"). mediapipe depends on the
+# unpinned opencv-contrib-python, which installs into the same cv2/ package
+# directory — pin it to the same version so the result doesn't depend on
+# install order. (libgl1, needed by the contrib build, is in the Dockerfile.)
+opencv-python-headless==4.10.0.84
+opencv-contrib-python==4.10.0.84
 mediapipe==0.10.11
 ImageHash==4.3.1
 pytest==8.3.4

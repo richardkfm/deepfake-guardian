@@ -1,17 +1,20 @@
 {
   "flagged_content": "⚠️ Markierter Inhalt ({reasons}). Admins: {mentions}",
   "flagged_content_no_admins": "⚠️ Markierter Inhalt ({reasons}).",
+  "delete_failed": "⚠️ Diese Nachricht verstößt gegen die Community-Richtlinien ({reasons}), aber ich kann sie nicht löschen – bitte entfernt sie und gebt mir das Admin-Recht „Nachrichten löschen“. Admins: {mentions}",
+  "delete_failed_no_admins": "⚠️ Diese Nachricht verstößt gegen die Community-Richtlinien ({reasons}), aber ich kann sie nicht löschen. Ein Admin sollte sie entfernen und mir das Admin-Recht „Nachrichten löschen“ geben.",
   "cyberbullying_notice": "⚠️ Diese Nachricht könnte Cybermobbing enthalten ({reasons}). Admins: {mentions}",
   "cyberbullying_notice_no_admins": "⚠️ Diese Nachricht könnte Cybermobbing enthalten ({reasons}).",
-
   "warning_notice": "⚠️ Deine Nachricht wurde entfernt, da sie gegen die Community-Richtlinien verstößt ({reasons}). Bitte halte diesen Raum sicher und respektvoll. Dies ist dein erster Hinweis.",
   "warning_admin_notification": "⚠️ Wiederholter Verstoß von {mention} ({reasons}). Admins: {admin_mentions}",
   "warning_admin_notification_no_admins": "⚠️ Wiederholter Verstoß ({reasons}). Dies ist Verwarnung Nr. {count} für diesen Nutzer.",
   "warning_supervisor_escalation": "🚨 Anhaltende Verstöße von {mention} ({reasons}) – {count} Vorfälle dokumentiert. Admins: {admin_mentions} – bitte überprüfen und handeln.",
   "warning_supervisor_escalation_no_admins": "🚨 Anhaltende Verstöße ({reasons}) – {count} Vorfälle dokumentiert. Bitte überprüfen und handeln.",
-
-  "privacy_notice": "🔒 *Datenschutzhinweis*\n\nDeepfake Guardian moderiert Inhalte in dieser Gruppe, um alle Mitglieder zu schützen. So werden deine Daten verarbeitet:\n\n• Nachrichten werden auf schädliche Inhalte analysiert, aber *niemals gespeichert*.\n• Nur Metadaten (Urteil, Kategorie-Scores) werden protokolliert – kein Nachrichtentext.\n• Deine Nutzer-ID wird als Einweg-Hash gespeichert (niemals im Klartext).\n• Alle Daten werden nach 30 Tagen automatisch gelöscht.\n• Du kannst jederzeit die Löschung deiner Daten beantragen.\n\nTippe /delete_my_data, um einen Löschantrag einzureichen (DSGVO Art. 17).",
+  "privacy_notice": "🔒 <b>Datenschutzhinweis</b>\n\nDeepfake Guardian moderiert Inhalte in dieser Gruppe, um alle Mitglieder zu schützen. So werden deine Daten verarbeitet:\n\n• Nachrichten werden auf schädliche Inhalte analysiert, aber <b>niemals gespeichert</b>.\n• Nur Metadaten (Urteil, Kategorie-Scores) werden protokolliert – kein Nachrichtentext.\n• Deine Nutzer-ID wird als Einweg-Hash gespeichert (niemals im Klartext).\n• Alle Daten werden nach 30 Tagen automatisch gelöscht.\n• Du kannst jederzeit die Löschung deiner Daten beantragen.\n\nSende mir /my_data im privaten Chat, um zu sehen, was über dich gespeichert ist (DSGVO Art. 15).\nTippe /delete_my_data, um einen Löschantrag einzureichen (DSGVO Art. 17).",
   "delete_my_data_submitted": "✅ Dein Löschantrag wurde eingereicht (Anfrage-ID: {request_id}). Alle gespeicherten Daten deines Kontos werden innerhalb von 30 Tagen gelöscht.",
   "delete_my_data_already_pending": "ℹ️ Für dein Konto ist bereits ein Löschantrag ausstehend (Anfrage-ID: {request_id}). Deine Daten werden innerhalb von 30 Tagen gelöscht.",
-  "delete_my_data_error": "❌ Dein Löschantrag konnte nicht eingereicht werden. Bitte versuche es später erneut oder wende dich an einen Admin."
+  "delete_my_data_error": "❌ Dein Löschantrag konnte nicht eingereicht werden. Bitte versuche es später erneut oder wende dich an einen Admin.",
+  "my_data_private_only": "🔒 Zum Schutz deiner Privatsphäre sende mir /my_data bitte in einem privaten Chat.",
+  "my_data_summary": "🔒 <b>Deine gespeicherten Daten</b>\n\nPseudonyme ID: <code>{user_hash}…</code>\n• Moderationsereignisse: {events}\n• Verwarnungseinträge: {warnings}\n• Löschanträge: {deletion_requests}\n\nNachrichteninhalte werden niemals gespeichert. Tippe /delete_my_data, um die Löschung zu beantragen.",
+  "my_data_error": "❌ Deine Daten konnten nicht abgerufen werden. Bitte versuche es später erneut oder wende dich an einen Admin."
 }

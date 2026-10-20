@@ -51,6 +51,44 @@ class TestModerateText:
         resp = client.post("/moderate_text", json={})
         assert resp.status_code == 422
 
+    @pytest.mark.parametrize(
+        ("hint", "expected"),
+        [("EN", "en"), ("en-US", "en"), (" de_DE ", "de"), ("de", "de")],
+    )
+    def test_language_hint_is_normalised(self, client, hint, expected):
+        """'EN' / 'en-US' used to bypass the English pack (no patterns, no
+        cyberbullying rules) because pack lookup is by exact lowercase code."""
+        safe = {"violence": 0.0, "sexual_violence": 0.0, "nsfw": 0.0, "cyberbullying": 0.0}
+        with patch("routes.classify_text", return_value=safe) as clf:
+            resp = client.post("/moderate_text", json={"text": "hello", "language": hint})
+        assert resp.status_code == 200
+        assert resp.json()["language"] == expected
+        assert clf.call_args.args[1] == expected
+
+    def test_unsupported_language_hint_falls_back_to_detection(self, client):
+        safe = {"violence": 0.0, "sexual_violence": 0.0, "nsfw": 0.0, "cyberbullying": 0.0}
+        with (
+            patch("routes.classify_text", return_value=safe) as clf,
+            patch("i18n.detector.detect_language", return_value="de"),
+        ):
+            resp = client.post(
+                "/moderate_text", json={"text": "hallo zusammen", "language": "xx"}
+            )
+        assert resp.status_code == 200
+        assert resp.json()["language"] == "de"
+        assert clf.call_args.args[1] == "de"
+
+    def test_uppercase_hint_still_runs_opt_in_patterns(self, client, monkeypatch):
+        from config import settings
+
+        monkeypatch.setattr(settings, "enabled_categories", ["advertising"])
+        resp = client.post(
+            "/moderate_text",
+            json={"text": "Buy now and use code SAVE50!", "language": "EN"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["scores"]["extra"]["advertising"] > 0.0
+
     def test_response_schema(self, client):
         resp = client.post("/moderate_text", json={"text": "test"})
         body = resp.json()
@@ -99,16 +137,31 @@ class TestModerateImage:
         assert "sexual_violence" in body["reasons"]
 
 
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "not base64 at all!!",  # invalid base64 alphabet / padding
+            "dGVzdA==",  # valid base64, but the bytes are not an image
+        ],
+    )
+    def test_undecodable_image_returns_400_not_500(self, client, payload):
+        """Bad client input must be a 400, not an unhandled 500."""
+        resp = client.post("/moderate_image", json={"image_base64": payload})
+        assert resp.status_code == 400
+        assert "decode" in resp.json()["detail"].lower()
+
+
 class TestModerateVideo:
-    def test_video_with_no_frames_returns_allow(self, client):
-        """When frame extraction yields no frames, returns allow."""
+    def test_video_with_no_frames_is_flagged_for_review(self, client):
+        """When frame extraction yields no frames, the video is flagged, not allowed."""
         with (
             patch("video_processing.extract_frames", return_value=[]),
         ):
             resp = client.post("/moderate_video", json={"video_base64": "dGVzdA=="})
         assert resp.status_code == 200
         body = resp.json()
-        assert body["verdict"] == "allow"
+        assert body["verdict"] == "flag"
+        assert body["reasons"] == ["unanalysable_video"]
         assert body["scores"]["violence"] == 0.0
 
     def test_video_with_frames_returns_aggregated_scores(self, client, small_image_b64):
@@ -159,3 +212,29 @@ class TestApiKeyAuth:
     def test_health_bypasses_auth(self, client_with_key):
         resp = client_with_key.get("/health")
         assert resp.status_code == 200
+
+    def test_api_key_compared_in_constant_time(self, client_with_key):
+        """A plain ``!=`` leaks the key prefix through response timing."""
+        import hmac
+
+        with patch("hmac.compare_digest", wraps=hmac.compare_digest) as spy:
+            resp = client_with_key.post(
+                "/moderate_text",
+                json={"text": "hello"},
+                headers={"X-API-Key": "test-secret-kez"},
+            )
+        assert resp.status_code == 401
+        spy.assert_called()
+
+    def test_non_ascii_api_key_rejected_not_crashing(self, client_with_key):
+        resp = client_with_key.post(
+            "/moderate_text",
+            json={"text": "hello"},
+            headers={"X-API-Key": b"test-secret-k\xe9y"},
+        )
+        assert resp.status_code == 401
+
+    @pytest.mark.parametrize("path", ["/health/", "/health/../moderate_text", "/Health"])
+    def test_only_exact_health_path_is_public(self, client_with_key, path):
+        resp = client_with_key.post(path, json={"text": "hello"})
+        assert resp.status_code != 200

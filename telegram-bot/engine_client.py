@@ -1,10 +1,18 @@
 """HTTP client for the moderation engine API.
 
-Includes exponential-backoff retry on transient network errors and 5xx responses
-so the bot degrades gracefully when the engine is temporarily unavailable.
+Includes exponential-backoff retry on transient failures (the engine is not
+reachable yet, or a gateway/5xx error) so the bot degrades gracefully when the
+engine is temporarily unavailable.
+
+Deliberately *not* retried:
+
+* 4xx responses (bad API key, invalid payload) — retrying cannot succeed.
+* Read/write timeouts — the engine received the request and is still busy
+  (typically a long video); re-sending it would only multiply the load.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 from typing import Any
 
@@ -26,6 +34,16 @@ _BACKOFF_FACTOR = 1.0
 # HTTP status codes that warrant an automatic retry.
 _RETRY_STATUS_CODES = {500, 502, 503, 504}
 
+# Transport errors that warrant an automatic retry: the request never reached
+# the engine (or the connection dropped before a response), so it is safe to
+# send again.
+_RETRY_TRANSPORT_ERRORS: tuple[type[Exception], ...] = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.RemoteProtocolError,
+)
+
 # ---------------------------------------------------------------------------
 # HTTP client (lazy singleton)
 # ---------------------------------------------------------------------------
@@ -40,46 +58,65 @@ def _get_client() -> httpx.AsyncClient:
             headers["X-API-Key"] = settings.engine_api_key
         _client = httpx.AsyncClient(
             base_url=settings.engine_url,
-            timeout=60,
+            timeout=settings.engine_timeout_seconds,
             headers=headers,
         )
     return _client
+
+
+async def aclose() -> None:
+    """Close the shared HTTP client (called on bot shutdown)."""
+    global _client
+    if _client is not None:
+        await _client.aclose()
+        _client = None
 
 
 # ---------------------------------------------------------------------------
 # Retry helper
 # ---------------------------------------------------------------------------
 
-async def _post_with_retry(path: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """POST *payload* to *path*, retrying on transient failures."""
-    import asyncio
+def _is_retryable(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _RETRY_STATUS_CODES
+    return isinstance(exc, _RETRY_TRANSPORT_ERRORS)
 
-    last_exc: Exception | None = None
+
+async def _post_with_retry(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """POST *payload* to *path*, retrying on transient failures.
+
+    Raises the last :class:`httpx.HTTPError` when the engine cannot be reached
+    or answers with an error.  Error logs carry only the path, status and
+    exception type — never the payload (message text / media).
+    """
     for attempt in range(_MAX_RETRIES + 1):
         try:
             resp = await _get_client().post(path, json=payload)
-            if resp.status_code in _RETRY_STATUS_CODES:
-                raise httpx.HTTPStatusError(
-                    f"Server error {resp.status_code}",
-                    request=resp.request,
-                    response=resp,
-                )
             resp.raise_for_status()
             return resp.json()
-        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
-            last_exc = exc
-            if attempt < _MAX_RETRIES:
-                wait = _BACKOFF_FACTOR * (2 ** attempt)
-                logger.warning(
-                    "engine_request_retry",
+        except httpx.HTTPError as exc:
+            status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+            if status in (401, 403):
+                logger.error(
+                    "engine_auth_failed",
                     path=path,
-                    attempt=attempt + 1,
-                    wait_seconds=wait,
-                    error=str(exc),
+                    status=status,
+                    hint="ENGINE_API_KEY must match the engine's API_KEY",
                 )
-                await asyncio.sleep(wait)
+            if not _is_retryable(exc) or attempt >= _MAX_RETRIES:
+                raise
+            wait = _BACKOFF_FACTOR * (2 ** attempt)
+            logger.warning(
+                "engine_request_retry",
+                path=path,
+                attempt=attempt + 1,
+                wait_seconds=wait,
+                status=status,
+                error_type=type(exc).__name__,
+            )
+            await asyncio.sleep(wait)
 
-    raise last_exc  # type: ignore[misc]
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------

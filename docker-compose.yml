@@ -3,8 +3,13 @@ version: "3.9"
 services:
   engine:
     build: ./engine
+    # Bots reach the engine over the internal "moderation" network. Publish
+    # the port on loopback only: API_KEY is empty by default, and binding
+    # 0.0.0.0 would expose moderation, GDPR and protected-image endpoints
+    # unauthenticated to anyone who can reach the host. Set API_KEY before
+    # changing this to "8000:8000".
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - ./engine/.env
     volumes:

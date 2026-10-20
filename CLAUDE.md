@@ -51,6 +51,8 @@ The central brain. All bots call this API to get moderation decisions.
 | `profiles.py` | Named threshold profiles (`minors_strict`, `default`, `permissive`) — values now sourced from the skill files |
 | `moderation/` | **Moderation skills** — markdown-defined categories (`skill.py`, `loader.py`, `registry.py`, `skills/*.md`) |
 | `models.py` | Pydantic request/response schemas (`ModerationResult`, `ModerationScores`) |
+| `media.py` | Hardened media decoding for the visual endpoints: bad input → `400`, EXIF orientation, 16-bit/float images, size limits, animated GIF/WebP/APNG frames (never fetches URLs — see `routes.fetch_media_url`) |
+| `video_processing.py` | OpenCV frame sampling (spread evenly over the video; sequential fallback for unknown frame counts / unseekable files) + per-frame max aggregation |
 | `known_content.py` | Opt-in StopNCII-style perceptual-hash matching for known NCII images (`/protected_images`) — see *Known-NCII-Hash Matching* below |
 | `config.py` | `Settings` class — all config from env vars with sane defaults |
 | `requirements.txt` | Python dependencies |
@@ -73,6 +75,11 @@ logs:
  "deepfake": {"mode": "provider", "configured": "sightengine",
               "active": "stub", "degraded": true}}
 ```
+
+With `DEEPFAKE_LAYERS` set it reports `mode: "layers"`, the `resolved` layer
+ids, which of them were `available` / `unavailable` the last time a request
+used them, and `degraded: true` when no configured id resolves or every
+resolved layer has turned out unusable (e.g. `openai` without a key).
 
 **Response shape** (`ModerationResult`):
 ```json
@@ -108,6 +115,8 @@ user-facing messaging.
 - Score ≥ threshold → `"delete"` (reason added to list)
 - Any score ≥ 0.4 but below threshold → `"flag"`
 - Otherwise → `"allow"`
+- `/moderate_video` with no analysable frames → `"flag"` with reason
+  `unanalysable_video` (review-only: the bots notify admins but record no warning)
 
 `decide()` is generic: it evaluates the five core categories plus any enabled
 opt-in categories, reading each category's threshold from its skill.
@@ -118,7 +127,7 @@ opt-in categories, reading each category's threshold from its skill.
 |---------|----------|-----------------|------|----------|---------------|
 | `minors_strict` | 0.5 | 0.3 | 0.4 | 0.6 | 0.4 |
 | `default` *(active)* | 0.5 | 0.5 | 0.8 | 0.7 | 0.65 |
-| `permissive` | 0.85 | 0.7 | 0.75 | 0.9 | 0.8 |
+| `permissive` | 0.85 | 0.7 | 0.9 | 0.9 | 0.8 |
 
 Select a profile via `MODERATION_PROFILE=default` (env var). Individual
 `THRESHOLD_*` env vars override a single value within the chosen profile. The
@@ -258,20 +267,32 @@ Complements the statistical `sexual_violence`/`deepfake_suspect` scoring
 above with a deterministic, victim/admin-confirmed layer: a **StopNCII.org
 -style perceptual-hash registry**. A victim (or an admin acting on their
 behalf) submits an image once via `POST /protected_images`; the engine
-computes its perceptual hash (`imagehash.phash`, 64-bit) and stores **only
-the hash** — the image itself is decoded, hashed, and discarded, never
+computes perceptual hashes (`imagehash.phash`, 64-bit — the full image plus
+three centre crops, stored together as one `phash_set` row) and stores **only
+the hashes** — the image itself is decoded, hashed, and discarded, never
 persisted. Every subsequent `/moderate_image` and `/moderate_video` call
-hashes the incoming media and compares it (Hamming distance) against the
-stored hashes; a close match — including re-crops, re-encodes, and
-re-compressions of the same photo, which is exactly the "identity theft
-via redistribution" pattern this is meant to catch — forces a `"delete"`
-verdict with reason `known_ncii_match`, overriding whatever the ML scores
-said.
+hashes the incoming media (every sampled frame, against one DB read) and
+compares it (Hamming distance) against the stored hashes; a close match —
+the "identity theft via redistribution" pattern this is meant to catch —
+forces a `"delete"` verdict with reason `known_ncii_match`, overriding
+whatever the ML scores said.
+
+What a match survives: re-encodes/re-compression, resizes, greyscale, EXIF
+rotation (images are EXIF-transposed before hashing), small crops (~5–10%),
+and added uniform borders (letterbox/pillarbox/padding — trimmed before
+hashing). With `KNOWN_IMAGE_HASH_ROBUST_MATCHING=true` also mirrored copies
+and centre re-crops down to ~60% per side (more comparisons, proportionally
+more false-match risk — hence off by default). Not covered: heavy one-sided
+crops, 90° pixel rotations, the image inside a collage/screenshot.
 
 This is **opt-in** (`KNOWN_IMAGE_HASH_MATCHING=true`, default `false`) since
 it only does anything once operators have populated the protected list, and
 adds the `ImageHash` dependency. `KNOWN_IMAGE_HASH_THRESHOLD` (default `10`)
-sets the max Hamming distance still considered a match — lower is stricter.
+sets the max Hamming distance still considered a match — lower is stricter;
+values above 32 are clamped (unrelated images average ~32). Blank/flat images
+are refused at registration (their hash would match every blank frame), and
+legacy single-`phash` rows keep working. `image_url` submissions go through
+the same SSRF-checked `routes.fetch_media_url` as the moderation endpoints.
 
 API endpoints (mounted at `/protected_images`):
 ```
@@ -294,19 +315,50 @@ GDPR-local equivalent, not a client for their API.
 
 | File | Purpose |
 |------|---------|
-| `main.py` | Registers handlers for text/photo/video in group chats; acts on verdicts |
-| `engine_client.py` | Async HTTP client that calls the engine API |
-| `config.py` | Settings loaded from env (`TELEGRAM_BOT_TOKEN`, `ENGINE_URL`) |
+| `main.py` | Registers the moderation handler (group chats) and GDPR commands; acts on verdicts |
+| `engine_client.py` | Async HTTP client for the engine (moderation, warnings, GDPR) with retry/backoff |
+| `config.py` | Settings loaded from env (see *Environment Variables*) |
+| `i18n/*.json` | Bot UI messages (`en`, `de`); `loader.get_message()` falls back to English |
 
 Bot behaviour:
-- Ignores private chats and commands (only group messages)
-- `"delete"` verdict: deletes message if bot is admin, otherwise @-mentions admins
-- `"flag"` verdict: always @-mentions admins
+- Moderates **group** messages only — text, captions, photos, videos, GIFs,
+  video notes, stickers, image/video documents, and **edited** messages. Text
+  and media results are merged (most severe verdict wins). Unknown `/commands`
+  are moderated too; only the bot's own commands are exempt
+- `"delete"` verdict: deletes the message if the bot is owner or an admin with
+  the *Delete messages* right; otherwise asks the admins to remove it
+- `"flag"` verdict: asks the admins to review
+- Every violation is recorded via `/warnings/record`; repeat offenders escalate
+  (notice → admin notification → supervisor escalation). Exactly **one** group
+  notice per moderated message; admin @-mentions are rate-limited per chat
+  (`ADMIN_MENTION_COOLDOWN_SECONDS`, supervisor escalations always mention)
+- Media over `MAX_MEDIA_MB` is moderated via its thumbnail
+- **Fail-open:** engine unreachable → message left alone, `engine_unavailable_fail_open` logged.
+  Only connection errors and 5xx are retried (not 4xx, not read timeouts)
+- Logs carry metadata only — never message text, media, raw user IDs or the bot token
+- GDPR commands: `/privacy`, `/my_data` (Art. 15, private chat only), `/delete_my_data` (Art. 17)
+- Setup gotcha: the bot must be an admin or have BotFather privacy mode
+  disabled, otherwise Telegram never delivers ordinary group messages to it
 
 ### `whatsapp-bot/`
 
-TypeScript/Node.js bot using the Baileys library. Mirrors telegram-bot behaviour.
-Lives in `src/`. See its own `README.md` for setup details.
+TypeScript/Node.js bot using the Baileys library (ES module, `NodeNext`).
+Mirrors telegram-bot behaviour: same verdict handling, warnings/escalation,
+one notice per message, mention cooldown, fail-open policy, i18n (`en`/`de`)
+and GDPR commands (`/privacy`, `/my_data`, `/delete_my_data` as whole-message
+`/` or `!` commands). Also unwraps view-once / disappearing messages and
+moderates edits.
+
+| File | Purpose |
+|------|---------|
+| `src/index.ts` | Socket/connection wiring, verdict actions, commands |
+| `src/content.ts` | Extracts text/media from Baileys messages (unwrapping, edits) |
+| `src/moderation.ts` | Pure logic: result merging, notice composition, mention cooldown |
+| `src/engine-client.ts` | Axios engine client with retry/backoff and log-safe `describeError()` |
+| `src/i18n.ts` | Bot UI messages (`en`, `de`) |
+| `test/*.test.ts` | `node:test` suite — run with `npm test` |
+
+See its own `README.md` for setup details.
 
 ---
 
@@ -318,7 +370,7 @@ Lives in `src/`. See its own `README.md` for setup details.
 | Area | Status |
 |------|--------|
 | Deepfake detection | ✅ Provider-based: `openai`, `ollama`, `local` (ONNX), `sightengine`, `api`, `stub`. Default: `stub` — set a provider + API key to enable. See `engine/deepfake/`. ✅ Pluggable multi-layer mechanism (markdown-defined layers, combinable) — see `engine/deepfake/layers/`, opt in via `DEEPFAKE_LAYERS` |
-| Video moderation | ✅ OpenCV frame extraction + per-frame analysis. See `engine/video_processing.py` |
+| Video moderation | ✅ OpenCV frame extraction + per-frame analysis. See `engine/video_processing.py`. Animated GIF/WebP/APNG sent to `/moderate_image` are analysed frame by frame too |
 | Image violence score | ✅ CLIP zero-shot classifier. See `engine/classifiers.py:_get_violence_classifier()` |
 | Tests | ✅ pytest suite with mocked ML models |
 | CI/CD | ✅ GitHub Actions |
@@ -334,7 +386,7 @@ Lives in `src/`. See its own `README.md` for setup details.
 | Self-harm / ED promotion detection | ✅ Opt-in skill (flag-leaning) — messages link crisis helplines |
 | Deepfake sexual violence ("revenge porn") detection | ✅ Statistical: `sexual_violence` escalates when NSFW + `deepfake_suspect` signals combine. ✅ Deterministic: opt-in StopNCII-style protected-hash matching (`KNOWN_IMAGE_HASH_MATCHING`) — see `engine/known_content.py` |
 | Admin dashboard | Not implemented — Phase 5 |
-| WhatsApp GDPR commands | Not implemented — Phase 6 |
+| WhatsApp GDPR commands | ✅ `/privacy`, `/my_data`, `/delete_my_data` (LID vs. phone-number JIDs are not yet mapped to one identity) |
 
 ---
 
@@ -414,7 +466,16 @@ curl -X POST http://localhost:8000/moderate_text \
 | `DEEPFAKE_LAYERS` | *(empty)* | Comma-separated deepfake detection layers to activate (e.g. `openai,local`); unset = legacy `DEEPFAKE_PROVIDER` behaviour |
 | `DEEPFAKE_LAYER_COMBINE` | `max` | How multiple active layers' scores combine: `max` / `mean` / `weighted_mean` |
 | `KNOWN_IMAGE_HASH_MATCHING` | `false` | Enable StopNCII-style protected-image hash matching (see `engine/known_content.py`); a match forces `delete` |
-| `KNOWN_IMAGE_HASH_THRESHOLD` | `10` | Max Hamming distance (of 64 bits) still considered a match |
+| `KNOWN_IMAGE_HASH_THRESHOLD` | `10` | Max Hamming distance (of 64 bits) still considered a match; values above 32 are clamped |
+| `KNOWN_IMAGE_HASH_ROBUST_MATCHING` | `false` | Also match mirrored copies and centre re-crops of protected images |
+| `DEEPFAKE_MAX_FACES` | `0` | Only send the N largest faces per image/frame to the deepfake detector(s); `0` = all |
+| `FRAME_INTERVAL` | `2.0` | Seconds between sampled video frames (spread evenly over the video when that would exceed `MAX_FRAMES`) |
+| `MAX_FRAMES` | `10` | Max frames analysed per video / animated image |
+| `MAX_VIDEO_DURATION` | `300` | Only the first N seconds of a video are analysed |
+| `MEDIA_URL_ALLOW_PRIVATE` | `false` | Allow `image_url`/`video_url` to resolve to private/loopback/link-local addresses (SSRF guard is on by default) |
+| `DATA_RETENTION_DAYS` | `30` | Days before moderation events are deleted |
+| `GDPR_CLEANUP_INTERVAL_MINUTES` | `60` | How often retention cleanup + pending Article 17 erasures run while the engine is up (also at startup) |
+| `MAX_MEDIA_BYTES` | `52428800` | Max bytes downloaded from an `image_url`/`video_url` (larger → 413) |
 
 ### Telegram bot (`telegram-bot/.env`)
 
@@ -422,12 +483,25 @@ curl -X POST http://localhost:8000/moderate_text \
 |----------|---------|-------------|
 | `TELEGRAM_BOT_TOKEN` | — | **Required.** Token from @BotFather |
 | `ENGINE_URL` | `http://engine:8000` | Engine base URL |
+| `ENGINE_API_KEY` | *(empty)* | Must match the engine's `API_KEY` |
+| `ENGINE_TIMEOUT_SECONDS` | `60` | Per-request engine timeout |
+| `BOT_LANGUAGE` | `en` | Notice language when the engine reports none (`en` / `de`) |
+| `MAX_MEDIA_MB` | `20` | Larger media is moderated via its thumbnail; `0` = no limit |
+| `ADMIN_MENTION_COOLDOWN_SECONDS` | `60` | Min. seconds between admin @-mentions per chat; `0` = always mention |
+| `LOG_LEVEL` | `info` | Logging verbosity |
 
 ### WhatsApp bot (`whatsapp-bot/.env`)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ENGINE_URL` | `http://engine:8000` | Engine base URL |
+| `ENGINE_API_KEY` | *(empty)* | Must match the engine's `API_KEY` |
+| `ENGINE_TIMEOUT_SECONDS` | `60` | Per-request engine timeout |
+| `BOT_LANGUAGE` | `en` | Notice language when the engine reports none, and for commands (`en` / `de`) |
+| `MAX_MEDIA_MB` | `20` | Larger media is moderated via its embedded thumbnail; `0` = no limit |
+| `ADMIN_MENTION_COOLDOWN_SECONDS` | `60` | Min. seconds between admin @-mentions per group; `0` = always mention |
+| `SESSION_DATA_PATH` | `./auth_info` | Baileys session storage |
+| `LOG_LEVEL` | `info` | Logging verbosity |
 
 ---
 
@@ -492,7 +566,12 @@ translation-only commits are all `PATCH` bumps — not `MINOR`.
 
 ## Security Notes
 
-- The engine currently has **no authentication**. Phase 1 adds an `API_KEY` middleware.
-- Do not expose the engine port (8000) publicly without auth.
+- Authentication is the `API_KEY` middleware (`X-API-Key` header, constant-time
+  compare; only `GET /health` is public). It is **disabled when `API_KEY` is
+  empty**, which is the default — set it for any non-local deployment.
+- Do not expose the engine port (8000) publicly without auth. `docker-compose.yml`
+  publishes it on `127.0.0.1` only; the bots use the internal network.
+- `image_url` / `video_url` fetches refuse private/loopback/link-local targets
+  (SSRF guard, `MEDIA_URL_ALLOW_PRIVATE` to opt out) and are capped at `MAX_MEDIA_BYTES`.
 - The WhatsApp bot uses an unofficial API (Baileys) — account bans are possible with aggressive usage.
 - Content sent to the engine is processed in-memory and not logged (only metadata: verdict, reasons, text preview capped at 80 chars).

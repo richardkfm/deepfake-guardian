@@ -1,15 +1,20 @@
 """FastAPI route handlers for the moderation engine."""
 from __future__ import annotations
 
+import asyncio
+import ipaddress
+import socket
+
+import httpx
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from classifiers import (
     classify_image,
     classify_text,
-    decode_image,
     detect_deepfake_suspect,
     score_deepfake_sexual_violence,
 )
@@ -26,6 +31,115 @@ from verdict import decide
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Helper: SSRF-safe media URL fetching
+# ---------------------------------------------------------------------------
+
+_MAX_REDIRECTS = 5
+
+# Reason for a video that yielded no analysable frames (flagged for review).
+UNANALYSABLE_VIDEO_REASON = "unanalysable_video"
+# Overridable in tests (httpx.MockTransport); None = real network transport.
+_media_transport: httpx.AsyncBaseTransport | None = None
+
+
+class MediaFetchError(Exception):
+    """A client-supplied media URL could not (or must not) be fetched."""
+
+    def __init__(self, detail: str, status_code: int = 400) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.status_code = status_code
+
+
+async def _resolve_host(host: str, port: int) -> list[str]:
+    """Return every IP address *host* resolves to (IP literals map to themselves)."""
+    infos = await asyncio.get_running_loop().getaddrinfo(
+        host, port, type=socket.SOCK_STREAM
+    )
+    return [str(info[4][0]) for info in infos]
+
+
+def _is_public_address(raw: str) -> bool:
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address = ipaddress.ip_address(raw)
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return addr.is_global and not addr.is_multicast
+
+
+async def _validate_media_url(url: httpx.URL) -> None:
+    """Reject non-HTTP(S) URLs and URLs whose host resolves to a non-public IP.
+
+    Prevents ``image_url`` / ``video_url`` from being used to probe or read
+    internal services (cloud metadata endpoints, a local Ollama, the Docker
+    network, …).  Every redirect hop is re-validated by the caller.  Note:
+    httpx resolves the name again when connecting, so a DNS-rebinding
+    attacker with a very short TTL is not fully excluded.
+    """
+    from config import settings
+
+    if url.scheme not in ("http", "https"):
+        raise MediaFetchError(f"Media URL scheme '{url.scheme}' is not allowed")
+    host = url.host
+    if not host:
+        raise MediaFetchError("Media URL has no host and is not allowed")
+    if settings.media_url_allow_private:
+        return
+    port = url.port or (443 if url.scheme == "https" else 80)
+    try:
+        addresses = await _resolve_host(host, port)
+    except OSError as exc:
+        raise MediaFetchError(f"Could not resolve media URL host: {exc}") from exc
+    if not addresses or not all(_is_public_address(a) for a in addresses):
+        raise MediaFetchError(
+            "Media URL points to a private or reserved address, which is not allowed"
+        )
+
+
+async def fetch_media_url(url: str, timeout: float) -> bytes:
+    """Download *url* with SSRF checks on every hop and a size cap.
+
+    Raises :class:`MediaFetchError` for disallowed/oversized/failed fetches.
+    """
+    from config import settings
+
+    max_bytes = settings.max_media_bytes
+    try:
+        current = httpx.URL(url)
+    except httpx.InvalidURL as exc:
+        raise MediaFetchError(f"Invalid media URL: {exc}") from exc
+
+    async with httpx.AsyncClient(
+        timeout=timeout, follow_redirects=False, transport=_media_transport
+    ) as client:
+        for _ in range(_MAX_REDIRECTS + 1):
+            await _validate_media_url(current)
+            async with client.stream("GET", current) as resp:
+                if resp.is_redirect:
+                    location = resp.headers.get("location")
+                    if not location:
+                        raise MediaFetchError("Media URL redirect without a Location header")
+                    current = current.join(location)
+                    continue
+                if resp.status_code >= 400:
+                    raise MediaFetchError(
+                        f"Fetching media URL failed with HTTP {resp.status_code}"
+                    )
+                too_large = MediaFetchError(
+                    f"Media exceeds the {max_bytes}-byte download limit", status_code=413
+                )
+                declared = resp.headers.get("content-length", "")
+                if declared.isdigit() and int(declared) > max_bytes:
+                    raise too_large
+                buf = bytearray()
+                async for chunk in resp.aiter_bytes():
+                    buf.extend(chunk)
+                    if len(buf) > max_bytes:
+                        raise too_large
+                return bytes(buf)
+    raise MediaFetchError("Media URL redirected too many times")
 
 
 # ---------------------------------------------------------------------------
@@ -47,15 +161,72 @@ async def _apply_known_hash_override(
     if not settings.known_image_hash_matching:
         return result
 
-    from known_content import find_match
+    from known_content import find_match_any
 
-    for image in images:
-        match = await find_match(session, image, settings.known_image_hash_threshold)
-        if match is not None:
-            logger.info("known_ncii_hash_match", protected_id=match.id)
-            reasons = list(dict.fromkeys([*result.reasons, "known_ncii_match"]))
-            return result.model_copy(update={"verdict": "delete", "reasons": reasons})
+    # One DB read for all images/frames; hashing runs off the event loop.
+    match = await find_match_any(
+        session,
+        images,
+        settings.known_image_hash_threshold,
+        robust=settings.known_image_hash_robust_matching,
+    )
+    if match is not None:
+        logger.info("known_ncii_hash_match", protected_id=match.id)
+        reasons = list(dict.fromkeys([*result.reasons, "known_ncii_match"]))
+        return result.model_copy(update={"verdict": "delete", "reasons": reasons})
     return result
+
+
+# ---------------------------------------------------------------------------
+# Helper: per-image visual analysis (runs in a worker thread)
+# ---------------------------------------------------------------------------
+
+
+def _analyse_still_image(image: Image.Image) -> dict[str, float]:
+    """Classify one image and score deepfake-sexual-violence (CPU / blocking IO)."""
+    img_scores = classify_image(image)
+    deepfake_score = detect_deepfake_suspect(image)
+    return {
+        "violence": img_scores["violence"],
+        "sexual_violence": max(
+            img_scores["sexual_violence"],
+            score_deepfake_sexual_violence(img_scores["nsfw"], deepfake_score),
+        ),
+        "nsfw": img_scores["nsfw"],
+        "deepfake_suspect": deepfake_score,
+    }
+
+
+def _analyse_image_frames(frames: list[Image.Image]) -> dict[str, float]:
+    """Analyse a still image, or every sampled frame of an animated one."""
+    if len(frames) == 1:
+        return _analyse_still_image(frames[0])
+    from video_processing import moderate_video_frames
+
+    return moderate_video_frames(frames)
+
+
+# ---------------------------------------------------------------------------
+# Helper: language hint normalisation
+# ---------------------------------------------------------------------------
+
+
+def _normalise_language_hint(hint: str | None) -> str | None:
+    """Map a client language hint ("EN", "en-US", "de_DE") to an enabled pack code.
+
+    Language packs and skill patterns are keyed by lowercase ISO 639-1 codes,
+    so an unnormalised hint silently skipped all language-specific patterns.
+    Returns ``None`` (→ auto-detect) for hints with no enabled pack.
+    """
+    from config import settings
+    from i18n.registry import LanguageRegistry
+
+    if not hint:
+        return None
+    code = hint.strip().lower().replace("_", "-").split("-", 1)[0]
+    if code in settings.enabled_languages and LanguageRegistry.get(code) is not None:
+        return code
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +259,7 @@ async def moderate_text(
     from i18n.detector import detect_language
     from moderation.registry import ModerationRegistry
 
-    lang_code = req.language or detect_language(req.text)
+    lang_code = _normalise_language_hint(req.language) or detect_language(req.text)
     text_scores = classify_text(req.text, lang_code)
 
     # Opt-in categories (advertising, political misinformation, …) — empty
@@ -138,31 +309,51 @@ async def moderate_image(
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> ModerationResult:
-    """Classify an image and return a moderation verdict."""
-    image = decode_image(req.image_base64, req.image_url)
-    if image is None:
+    """Classify an image and return a moderation verdict.
+
+    Animated images (GIF / WebP / APNG) are analysed frame by frame, like a
+    video, so harmful content can't hide behind an innocuous first frame.
+    """
+    from config import settings
+    from media import MediaDecodeError, decode_base64, load_image_frames
+
+    if not req.image_base64 and not req.image_url:
         raise HTTPException(status_code=400, detail="Provide image_base64 or image_url")
 
-    img_scores = classify_image(image)
-    deepfake_score = detect_deepfake_suspect(image)
-    sexual_violence_score = max(
-        img_scores["sexual_violence"],
-        score_deepfake_sexual_violence(img_scores["nsfw"], deepfake_score),
-    )
+    try:
+        if req.image_base64:
+            data = decode_base64(req.image_base64)
+        else:
+            assert req.image_url is not None
+            data = await fetch_media_url(req.image_url, timeout=30)
+        # Decoding and the ML models are blocking: keep them off the event
+        # loop so one slow image or remote deepfake provider call doesn't
+        # stall every other request.
+        frames = await run_in_threadpool(load_image_frames, data, settings.max_frames)
+    except MediaFetchError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except (MediaDecodeError, httpx.HTTPError) as exc:
+        # Malformed base64, non-image bytes, decompression bombs or an
+        # unreachable URL are client errors, not 500s.
+        raise HTTPException(status_code=400, detail=f"Could not decode image: {exc}") from exc
+    del data  # only the decoded frames are needed from here on
+
+    frame_scores = await run_in_threadpool(_analyse_image_frames, frames)
 
     scores = ModerationScores(
-        violence=img_scores["violence"],
-        sexual_violence=sexual_violence_score,
-        nsfw=img_scores["nsfw"],
-        deepfake_suspect=deepfake_score,
+        violence=frame_scores["violence"],
+        sexual_violence=frame_scores["sexual_violence"],
+        nsfw=frame_scores["nsfw"],
+        deepfake_suspect=frame_scores["deepfake_suspect"],
         cyberbullying=0.0,
     )
     result = decide(scores)
-    result = await _apply_known_hash_override(session, [image], result)
+    result = await _apply_known_hash_override(session, frames, result)
     logger.info(
         "image_moderation",
         verdict=result.verdict,
         reasons=result.reasons,
+        frames_analysed=len(frames),
     )
 
     if req.user_id or req.group_id:
@@ -195,32 +386,44 @@ async def moderate_video(
     from video_processing import decode_video, extract_frames, moderate_video_frames
 
     try:
-        video_data = decode_video(req.video_base64, req.video_url)
+        if req.video_base64:
+            video_data = decode_video(req.video_base64, None)
+        else:
+            assert req.video_url is not None
+            video_data = await fetch_media_url(req.video_url, timeout=60)
+    except MediaFetchError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not decode video: {exc}") from exc
 
-    frames = extract_frames(video_data)
+    frames = await run_in_threadpool(extract_frames, video_data)
+    del video_data  # don't keep the raw upload alive for the rest of the request
 
     if not frames:
-        logger.warning("video_moderation: no frames extracted — returning allow")
-        frame_scores = {
-            "violence": 0.0,
-            "sexual_violence": 0.0,
-            "nsfw": 0.0,
-            "deepfake_suspect": 0.0,
-        }
+        # Nothing could be analysed, so don't fail open with "allow": ask a
+        # human to review. Not a violation by the sender, so bots skip warnings.
+        logger.warning("video_moderation: no frames extracted — flagging for review")
+        scores = ModerationScores(
+            violence=0.0,
+            sexual_violence=0.0,
+            nsfw=0.0,
+            deepfake_suspect=0.0,
+            cyberbullying=0.0,
+        )
+        result = ModerationResult(
+            verdict="flag", reasons=[UNANALYSABLE_VIDEO_REASON], scores=scores, language=None
+        )
     else:
-        frame_scores = moderate_video_frames(frames)
-
-    scores = ModerationScores(
-        violence=frame_scores["violence"],
-        sexual_violence=frame_scores["sexual_violence"],
-        nsfw=frame_scores["nsfw"],
-        deepfake_suspect=frame_scores["deepfake_suspect"],
-        cyberbullying=0.0,
-    )
-    result = decide(scores)
-    result = await _apply_known_hash_override(session, frames, result)
+        frame_scores = await run_in_threadpool(moderate_video_frames, frames)
+        scores = ModerationScores(
+            violence=frame_scores["violence"],
+            sexual_violence=frame_scores["sexual_violence"],
+            nsfw=frame_scores["nsfw"],
+            deepfake_suspect=frame_scores["deepfake_suspect"],
+            cyberbullying=0.0,
+        )
+        result = decide(scores)
+        result = await _apply_known_hash_override(session, frames, result)
     logger.info(
         "video_moderation",
         verdict=result.verdict,
