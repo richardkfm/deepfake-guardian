@@ -152,15 +152,16 @@ class TestModerateImage:
 
 
 class TestModerateVideo:
-    def test_video_with_no_frames_returns_allow(self, client):
-        """When frame extraction yields no frames, returns allow."""
+    def test_video_with_no_frames_is_flagged_for_review(self, client):
+        """When frame extraction yields no frames, the video is flagged, not allowed."""
         with (
             patch("video_processing.extract_frames", return_value=[]),
         ):
             resp = client.post("/moderate_video", json={"video_base64": "dGVzdA=="})
         assert resp.status_code == 200
         body = resp.json()
-        assert body["verdict"] == "allow"
+        assert body["verdict"] == "flag"
+        assert body["reasons"] == ["unanalysable_video"]
         assert body["scores"]["violence"] == 0.0
 
     def test_video_with_frames_returns_aggregated_scores(self, client, small_image_b64):

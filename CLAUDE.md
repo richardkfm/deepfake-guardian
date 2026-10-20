@@ -115,6 +115,8 @@ user-facing messaging.
 - Score ≥ threshold → `"delete"` (reason added to list)
 - Any score ≥ 0.4 but below threshold → `"flag"`
 - Otherwise → `"allow"`
+- `/moderate_video` with no analysable frames → `"flag"` with reason
+  `unanalysable_video` (review-only: the bots notify admins but record no warning)
 
 `decide()` is generic: it evaluates the five core categories plus any enabled
 opt-in categories, reading each category's threshold from its skill.

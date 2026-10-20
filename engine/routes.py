@@ -38,6 +38,9 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 _MAX_REDIRECTS = 5
+
+# Reason for a video that yielded no analysable frames (flagged for review).
+UNANALYSABLE_VIDEO_REASON = "unanalysable_video"
 # Overridable in tests (httpx.MockTransport); None = real network transport.
 _media_transport: httpx.AsyncBaseTransport | None = None
 
@@ -397,25 +400,30 @@ async def moderate_video(
     del video_data  # don't keep the raw upload alive for the rest of the request
 
     if not frames:
-        logger.warning("video_moderation: no frames extracted — returning allow")
-        frame_scores = {
-            "violence": 0.0,
-            "sexual_violence": 0.0,
-            "nsfw": 0.0,
-            "deepfake_suspect": 0.0,
-        }
+        # Nothing could be analysed, so don't fail open with "allow": ask a
+        # human to review. Not a violation by the sender, so bots skip warnings.
+        logger.warning("video_moderation: no frames extracted — flagging for review")
+        scores = ModerationScores(
+            violence=0.0,
+            sexual_violence=0.0,
+            nsfw=0.0,
+            deepfake_suspect=0.0,
+            cyberbullying=0.0,
+        )
+        result = ModerationResult(
+            verdict="flag", reasons=[UNANALYSABLE_VIDEO_REASON], scores=scores, language=None
+        )
     else:
         frame_scores = await run_in_threadpool(moderate_video_frames, frames)
-
-    scores = ModerationScores(
-        violence=frame_scores["violence"],
-        sexual_violence=frame_scores["sexual_violence"],
-        nsfw=frame_scores["nsfw"],
-        deepfake_suspect=frame_scores["deepfake_suspect"],
-        cyberbullying=0.0,
-    )
-    result = decide(scores)
-    result = await _apply_known_hash_override(session, frames, result)
+        scores = ModerationScores(
+            violence=frame_scores["violence"],
+            sexual_violence=frame_scores["sexual_violence"],
+            nsfw=frame_scores["nsfw"],
+            deepfake_suspect=frame_scores["deepfake_suspect"],
+            cyberbullying=0.0,
+        )
+        result = decide(scores)
+        result = await _apply_known_hash_override(session, frames, result)
     logger.info(
         "video_moderation",
         verdict=result.verdict,

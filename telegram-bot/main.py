@@ -74,6 +74,9 @@ logger = structlog.get_logger()
 # Constants
 # ---------------------------------------------------------------------------
 _VERDICT_SEVERITY = {"allow": 0, "flag": 1, "delete": 2}
+# Engine reasons that ask for human review but are not the sender's fault
+# (e.g. a video the engine could not decode) — no warning is recorded.
+REVIEW_ONLY_REASONS = frozenset({"unanalysable_video"})
 # How long admin lists / the bot's own rights are cached per chat.
 _CHAT_CACHE_TTL_SECONDS = 300.0
 # Updates processed in parallel, so one slow video does not stall every group.
@@ -358,7 +361,7 @@ async def _record_warning(
 ) -> tuple[str | None, int | None]:
     """Record the violation; returns ``(escalation action, warning count)``."""
     user_id = _sender_id(message)
-    if user_id is None:
+    if user_id is None or (reasons and set(reasons) <= REVIEW_ONLY_REASONS):
         return None, None
     try:
         res = await engine_client.record_warning(user_id, str(message.chat_id), reasons)

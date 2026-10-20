@@ -304,6 +304,15 @@ class TestHandleVerdict:
         text = msg.reply_text.call_args.args[0]
         assert "@teacher" in text and "removed" not in text
 
+    async def test_unanalysable_video_asks_admins_without_warning(self):
+        msg = _message(text="x", admins=[_admin("teacher")])
+        result = {"verdict": "flag", "reasons": ["unanalysable_video"]}
+        with patch.object(main.engine_client, "record_warning", _warn()) as rw:
+            await main._handle_verdict(msg, result, _context())
+        rw.assert_not_called()
+        msg.reply_text.assert_awaited_once()
+        assert "@teacher" in msg.reply_text.call_args.args[0]
+
     async def test_admins_without_username_get_link_mention(self):
         msg = _message(text="x", admins=[_admin(None, uid=5), _admin("botty", is_bot=True)])
         with patch.object(main.engine_client, "record_warning", _warn()):

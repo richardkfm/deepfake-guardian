@@ -73,6 +73,10 @@ and [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`).
   the whole (capped) duration instead of the first ~20 s, and containers
   without a usable frame count are decoded sequentially. Analysis runs in a
   thread pool so it no longer blocks the event loop.
+- **Unanalysable videos no longer fail open.** A video that yields no frames
+  now returns `flag` with reason `unanalysable_video` instead of `allow`.
+  Both bots ask the admins to review it but record no warning against the
+  sender, since a broken file is not a violation.
 - **Deepfake:** a raising detector or layer no longer fails the request;
   NaN/out-of-range scores are clamped; small faces get a second
   full-range MediaPipe pass; two-class ONNX outputs use the "fake" class;

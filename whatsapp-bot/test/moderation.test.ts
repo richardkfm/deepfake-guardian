@@ -6,6 +6,7 @@ import { MESSAGES, getMessage } from "../src/i18n.js";
 import {
   MentionCooldown,
   composeNotice,
+  isViolation,
   mentionTag,
   mergeResults,
   wantsAdminMentions,
@@ -150,5 +151,17 @@ describe("i18n", () => {
   it("leaves unknown placeholders and returns the key when missing", () => {
     assert.equal(getMessage("nope", "en"), "nope");
     assert.match(getMessage("flagged_content", "en", { reasons: "x" }), /\{mentions\}/);
+  });
+});
+
+describe("isViolation", () => {
+  it("treats an unanalysable video as review-only", () => {
+    assert.equal(isViolation(["unanalysable_video"]), false);
+  });
+
+  it("counts real violations even alongside review-only reasons", () => {
+    assert.equal(isViolation(["nsfw"]), true);
+    assert.equal(isViolation([]), true);
+    assert.equal(isViolation(["unanalysable_video", "violence"]), true);
   });
 });

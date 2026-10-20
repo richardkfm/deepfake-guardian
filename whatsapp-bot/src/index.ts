@@ -52,6 +52,7 @@ import { getMessage } from "./i18n.js";
 import { logger } from "./logger.js";
 import {
   composeNotice,
+  isViolation,
   MentionCooldown,
   mergeResults,
   wantsAdminMentions,
@@ -228,7 +229,7 @@ async function handleVerdict(
   let action: EscalationAction | null = null;
   let count: number | null = null;
   const sender = senderJid(message);
-  if (sender) {
+  if (sender && isViolation(reasons)) {
     try {
       const warning = await recordWarning(sender, jid, reasons);
       action = warning.action;

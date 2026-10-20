@@ -31,6 +31,19 @@ export function mergeResults(
   return { verdict, reasons, language };
 }
 
+/**
+ * Engine reasons that ask for human review but are not the sender's fault
+ * (e.g. a video the engine could not decode) — no warning is recorded.
+ */
+export const REVIEW_ONLY_REASONS: ReadonlySet<string> = new Set([
+  "unanalysable_video",
+]);
+
+/** Whether *reasons* contain an actual violation worth a warning. */
+export function isViolation(reasons: string[]): boolean {
+  return reasons.length === 0 || reasons.some((r) => !REVIEW_ONLY_REASONS.has(r));
+}
+
 /** Text that WhatsApp renders as a mention of *jid* (paired with `mentions`). */
 export function mentionTag(jid: string): string {
   return `@${jid.split("@")[0].split(":")[0]}`;
